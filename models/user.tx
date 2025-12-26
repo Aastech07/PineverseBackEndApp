@@ -1,0 +1,124 @@
+import mongoose from 'mongoose';
+
+const FollowSchema = new mongoose.Schema({
+  follower: { type: mongoose.Schema.Types.ObjectId, required: true },   // User who follows
+  following: { type: mongoose.Schema.Types.ObjectId, required: true },  // User who is followed
+  status: { type: Boolean, default: false }, // false = pending, true = accepted
+}, { timestamps: true });
+
+export default mongoose.model('Follow', FollowSchema);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+const mongoose = require('mongoose');
+
+const bidSchema = new mongoose.Schema(
+  {
+    quotation: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+    status: {
+      type: String,
+      enum: ['Negotiable', 'Non-Negotiable'],
+      default: 'Negotiable',
+      required: true,
+    },
+    validityOfQuote: {
+      type: String,
+      enum: ['7 Days', '10 Days', '1 Month'],
+      default: '7 Days',
+      required: true,
+    },
+    advancePayment: {
+      type: Number,
+      min: 0,
+      max: 100,
+      default: 0,
+      required: true,
+    },
+    noteToCustomer: {
+      type: String,
+      maxlength: 500,
+      default: '',
+    },
+    bidderId: {
+      type: String,
+      required: true,
+    },
+    recipientId: {
+      type: String,
+      required: true,
+    },
+    jobId: {
+      type: String,
+      required: true,
+    },
+    activeStatus: {
+      type: String,
+      enum: ['sent', 'accepted', 'rejected'],
+      default: 'sent',
+    },
+    submittedAt: {
+      type: Date,
+      default: Date.now,
+    },
+    servicesProvided: {
+      type: [String],
+      default: [],
+    },
+    locationProvided: {
+      type: [String],
+      default: [],
+    },
+    image: {
+      type: String,
+      required: true,
+    },
+    name: {
+      type: String,
+      required: true,
+    },
+    phone:{
+       type: String,
+      required: true, 
+     match: [/^[0-9]{10}$/, "Please enter a valid 10-digit phone number"],
+    }
+
+  },
+  { timestamps: true }
+);
+
+const Bid = mongoose.model('Bid', bidSchema);
+
+module.exports = Bid;

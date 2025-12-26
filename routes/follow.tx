@@ -1,0 +1,840 @@
+// routes/followRoutes.js
+import express from 'express';
+import mongoose from 'mongoose';
+import Follow from '../models/User.js';
+
+const router = express.Router();
+
+// ✅ Follow request
+router.post('/follow', async (req, res) => {
+  const { followerId, followingId } = req.body;
+
+  if (!mongoose.Types.ObjectId.isValid(followerId) || !mongoose.Types.ObjectId.isValid(followingId)) {
+    return res.status(400).json({ message: "Invalid ID format" });
+  }
+
+  if (followerId === followingId) {
+    return res.status(400).json({ message: "You can't follow yourself" });
+  }
+
+  try {
+    const followerObjId = new mongoose.Types.ObjectId(followerId);
+    const followingObjId = new mongoose.Types.ObjectId(followingId);
+
+    const existing = await Follow.findOne({ follower: followerObjId, following: followingObjId });
+    if (existing) return res.status(400).json({ message: 'Already requested/following' });
+
+    const follow = new Follow({ follower: followerObjId, following: followingObjId });
+    await follow.save();
+    res.json({ message: 'Follow request sent', follow });
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ✅ Accept request
+router.post('/accept', async (req, res) => {
+  const { followerId, followingId } = req.body;
+
+  if (!mongoose.Types.ObjectId.isValid(followerId) || !mongoose.Types.ObjectId.isValid(followingId)) {
+    return res.status(400).json({ message: "Invalid ID format" });
+  }
+
+  try {
+    const followerObjId = new mongoose.Types.ObjectId(followerId);
+    const followingObjId = new mongoose.Types.ObjectId(followingId);
+
+    const follow = await Follow.findOne({ follower: followerObjId, following: followingObjId });
+    if (!follow) return res.status(404).json({ message: 'Follow request not found' });
+
+    follow.status = true;
+    await follow.save();
+
+    res.json({ message: 'Follow request accepted', follow });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ✅ Unfollow
+router.delete('/unfollow', async (req, res) => {
+  const { followerId, followingId } = req.body;
+
+  if (!mongoose.Types.ObjectId.isValid(followerId) || !mongoose.Types.ObjectId.isValid(followingId)) {
+    return res.status(400).json({ message: "Invalid ID format" });
+  }
+
+  try {
+    const followerObjId = new mongoose.Types.ObjectId(followerId);
+    const followingObjId = new mongoose.Types.ObjectId(followingId);
+
+    await Follow.findOneAndDelete({ follower: followerObjId, following: followingObjId });
+    res.json({ message: 'Unfollowed successfully' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ✅ Status check
+router.post('/status', async (req, res) => {
+  const { followerId, followingId } = req.body;
+
+  if (!mongoose.Types.ObjectId.isValid(followerId) || !mongoose.Types.ObjectId.isValid(followingId)) {
+    return res.status(400).json({ message: "Invalid ID format" });
+  }
+
+  try {
+    const followerObjId = new mongoose.Types.ObjectId(followerId);
+    const followingObjId = new mongoose.Types.ObjectId(followingId);
+
+    const follow = await Follow.findOne({ follower: followerObjId, following: followingObjId });
+
+    if (!follow) return res.json({ status: null });
+
+    res.json({ status: follow.status });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+export default router;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import express from 'express';
+import Follow from '../models/User.js';
+
+const router = express.Router();
+
+// Ensure user exists in DB
+const ensureUserExists = async (userId) => {
+  let user = await Follow.findOne({ userId });
+  if (!user) {
+    user = await Follow.create({ userId });
+  }
+  return user;
+};
+
+// 1. Send Follow Request
+router.post('/request-follow/:receiverId', async (req, res) => {
+  try {
+    const { senderId } = req.body;
+    const { receiverId } = req.params;
+
+    if (senderId === receiverId) {
+      return res.status(400).json({ error: "Cannot follow yourself" });
+    }
+
+    await ensureUserExists(senderId);
+    const receiver = await ensureUserExists(receiverId);
+
+    if (!receiver.followRequests.includes(senderId)) {
+      receiver.followRequests.push(senderId);
+      await receiver.save();
+    }
+
+    res.status(200).json({ message: 'Follow request sent' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 2. Accept Follow Request
+router.post('/accept-follow/:followerId', async (req, res) => {
+  try {
+    const { followingId } = req.body;
+    const { followerId } = req.params;
+
+    const followingUser = await ensureUserExists(followingId);
+    const followerUser = await ensureUserExists(followerId);
+
+    // Remove from requests
+    followingUser.followRequests = followingUser.followRequests.filter(id => id !== followerId);
+
+    // Add to followers/following
+    if (!followingUser.followers.includes(followerId)) {
+      followingUser.followers.push(followerId);
+    }
+    if (!followerUser.following.includes(followingId)) {
+      followerUser.following.push(followingId);
+    }
+
+    // ✅ Add to allConnections
+    if (!followingUser.allConnections.includes(followerId)) {
+      followingUser.allConnections.push(followerId);
+    }
+    if (!followerUser.allConnections.includes(followingId)) {
+      followerUser.allConnections.push(followingId);
+    }
+
+    await followingUser.save();
+    await followerUser.save();
+
+    res.status(200).json({ message: 'Follow request accepted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 3. Reject Follow Request
+router.post('/reject-follow/:receiverId', async (req, res) => {
+  try {
+    const { senderId } = req.body;
+    const receiver = await ensureUserExists(req.params.receiverId);
+
+    receiver.followRequests = receiver.followRequests.filter(id => id !== senderId);
+    await receiver.save();
+
+    res.status(200).json({ message: 'Follow request rejected' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 4. Check if follow button should show (for a single user)
+router.get('/should-show-follow/:profileUserId/:currentUserId', async (req, res) => {
+  try {
+    const { profileUserId, currentUserId } = req.params;
+    const profileUser = await ensureUserExists(profileUserId);
+
+    const isFollowing = profileUser.followers.includes(currentUserId);
+    const isRequested = profileUser.followRequests.includes(currentUserId);
+
+    const shouldShowFollow = !isFollowing && !isRequested;
+
+    res.status(200).json({ shouldShowFollow });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ Get allConnections by userId
+router.get('/all-connections/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const user = await ensureUserExists(userId);
+
+    res.status(200).json({ allConnections: user.allConnections });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ Get follow requests
+router.get('/get-follow-requests/:userId', async (req, res) => {
+  try {
+    const user = await ensureUserExists(req.params.userId);
+    res.status(200).json({ followRequestIds: user.followRequests });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ Get all followers
+router.get('/followers/:userId', async (req, res) => {
+  try {
+    const user = await ensureUserExists(req.params.userId);
+    res.status(200).json({ followers: user.followers });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ Get all following
+router.get('/following/:userId', async (req, res) => {
+  try {
+    const user = await ensureUserExists(req.params.userId);
+    res.status(200).json({ following: user.following });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ Remove follower
+router.post('/remove-follower/:userId', async (req, res) => {
+  try {
+    const { targetId } = req.body;
+    const { userId } = req.params;
+
+    const user = await ensureUserExists(userId);
+    const targetUser = await ensureUserExists(targetId);
+
+    user.followers = user.followers.filter(id => id !== targetId);
+    targetUser.following = targetUser.following.filter(id => id !== userId);
+
+    // ✅ Also remove from allConnections
+    user.allConnections = user.allConnections.filter(id => id !== targetId);
+    targetUser.allConnections = targetUser.allConnections.filter(id => id !== userId);
+
+    await user.save();
+    await targetUser.save();
+
+    res.status(200).json({ message: 'Follower removed successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ Unfollow someone
+router.post('/unfollow/:userId', async (req, res) => {
+  try {
+    const { targetId } = req.body;
+    const { userId } = req.params;
+
+    const user = await ensureUserExists(userId);
+    const targetUser = await ensureUserExists(targetId);
+
+    user.following = user.following.filter(id => id !== targetId);
+    targetUser.followers = targetUser.followers.filter(id => id !== userId);
+
+    // ✅ Also remove from allConnections
+    user.allConnections = user.allConnections.filter(id => id !== targetId);
+    targetUser.allConnections = targetUser.allConnections.filter(id => id !== userId);
+
+    await user.save();
+    await targetUser.save();
+
+    res.status(200).json({ message: 'Unfollowed successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+export default router;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+const express = require('express');
+const Follow = require('../models/User.js'); // If your Follow model is different, change this path
+const Notification = require('../models/notificationModel.js');
+const User = require('../models/User.js');
+const admin = require('../firebase.js'); // <-- import from separate file
+
+ 
+async function sendPushNotification(token, title, body, data = {}) {
+  try {
+    const message = {
+      token,
+      notification: { title, body },
+      data: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v)])),
+      android: { priority: 'high', notification: { sound: 'default' } },
+      apns: { payload: { aps: { sound: 'default' } } },
+    };
+
+    const response = await admin.messaging().send(message);
+    console.log('✅ Successfully sent message:', response);
+    return response;
+  } catch (error) {
+    console.error('❌ Error sending message:', error);
+    if (error.code === 'messaging/registration-token-not-registered') {
+      console.error('The provided FCM token is invalid or unregistered.');
+    } else if (error.code === 'app/invalid-credential') {
+      console.error('Invalid service account key. Generate a new key from Firebase Console.');
+    }
+    throw error;
+  }
+}
+// ----------------------------------------------------------------
+
+const router = express.Router();
+
+function followRouter(io) {
+  // Socket.io connection handling
+  io.on('connection', (socket) => {
+    console.log(`New socket connection: ${socket.id}`);
+
+    socket.on('join', (userId) => {
+      if (typeof userId === 'string' && userId.length > 0) {
+        socket.join(userId);
+        console.log(`Socket.IO: User ${userId} joined room`);
+      }
+    });
+
+    socket.on('disconnect', () => {
+      console.log(`Socket disconnected: ${socket.id}`);
+    });
+
+    socket.on('subscribe_to_notifications', (userId) => {
+      if (typeof userId === 'string' && userId.length > 0) {
+        socket.join(`notifications_${userId}`);
+        console.log(`User ${userId} subscribed to notifications`);
+      }
+    });
+
+    socket.on('unsubscribe_from_notifications', (userId) => {
+      if (typeof userId === 'string' && userId.length > 0) {
+        socket.leave(`notifications_${userId}`);
+        console.log(`User ${userId} unsubscribed from notifications`);
+      }
+    });
+  });
+
+  // ✅ Update FCM token
+  router.post('/update-fcm-token', async (req, res) => {
+    const { userId, fcmToken } = req.body;
+    if (!userId || typeof userId !== 'string') return res.status(400).json({ message: 'Invalid or missing userId' });
+    if (!fcmToken || typeof fcmToken !== 'string') return res.status(400).json({ message: 'Invalid or missing fcmToken' });
+
+    try {
+      const user = await User.findOneAndUpdate({ userId }, { fcmToken }, { new: true });
+      if (!user) return res.status(404).json({ message: 'User not found' });
+      res.json({ message: 'FCM token updated successfully', user });
+    } catch (err) {
+      console.error('Error updating FCM token:', err);
+      res.status(500).json({ message: 'Server error', error: err.message });
+    }
+  });
+
+  // SSE notification stream
+  router.get('/notifications/stream/:userId', (req, res) => {
+    const { userId } = req.params;
+    if (!userId || typeof userId !== 'string') return res.status(400).json({ message: 'Invalid userId' });
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Connection': 'keep-alive',
+      'Cache-Control': 'no-cache'
+    });
+
+    res.write('event: connected\ndata: Connected to notification stream\n\n');
+
+    const sendNotification = (notification) => {
+      res.write(`event: notification\n`);
+      res.write(`data: ${JSON.stringify(notification)}\n\n`);
+    };
+
+    io.on('connection', (socket) => {
+      socket.join(`notifications_${userId}`);
+    });
+
+    const listener = (notification) => {
+      if (notification.recipient === userId) sendNotification(notification);
+    };
+
+    io.on('follow_request', listener);
+    io.on('follow_accepted', listener);
+    io.on('unfollow', listener);
+
+    req.on('close', () => {
+      io.off('follow_request', listener);
+      io.off('follow_accepted', listener);
+      io.off('unfollow', listener);
+      console.log(`Client ${userId} disconnected from SSE`);
+    });
+  });
+
+  // Follow request
+  router.post('/follow', async (req, res) => {
+    const { followerId, followingId, userId } = req.body;
+    if (!followerId || !followingId || !userId) return res.status(400).json({ message: 'Invalid followerId, followingId, or userId' });
+    if (followerId === followingId) return res.status(400).json({ message: "You can't follow yourself" });
+
+    try {
+      const existing = await Follow.findOne({ follower: followerId, following: followingId });
+      if (existing) {
+        if (existing.status === false) return res.status(400).json({ message: 'Follow request already pending' });
+        return res.status(400).json({ message: 'Already following' });
+      }
+
+      const follow = new Follow({ follower: followerId, following: followingId, userId, status: false });
+      await follow.save();
+
+      const notification = new Notification({
+        recipient: followingId,
+        sender: followerId,
+        type: 'follow_request',
+        message: `User ${followerId} has sent you a follow request`,
+        read: false,
+        data: { followerId, followingId },
+      });
+      await notification.save();
+
+      const notificationData = {
+        _id: notification._id,
+        recipient: followingId,
+        sender: followerId,
+        type: 'follow_request',
+        message: notification.message,
+        createdAt: notification.createdAt,
+        read: notification.read,
+        data: notification.data
+      };
+
+      io.to(followingId).emit('follow_request', notificationData);
+      io.to(`notifications_${followingId}`).emit('new_notification', notificationData);
+
+      try {
+        const recipientUser = await User.findOne({ userId: followingId }).select('fcmToken username');
+        const senderUser = await User.findOne({ userId: followerId }).select('username');
+
+        if (recipientUser && recipientUser.fcmToken && senderUser) {
+          await sendPushNotification(
+            recipientUser.fcmToken,
+            'New Follow Request',
+            `${senderUser.username} has sent you a follow request`,
+            { type: 'follow_request', senderId: followerId, notificationId: notification._id.toString() }
+          );
+        }
+      } catch (pushErr) {
+        console.error('Push error on follow:', pushErr);
+      }
+
+      const unreadCount = await Notification.countDocuments({ recipient: followingId, read: false });
+      io.to(followingId).emit('notification_count_update', { userId: followingId, count: unreadCount });
+      io.to(`notifications_${followingId}`).emit('unread_count', unreadCount);
+
+      res.json({ message: 'Follow request sent', follow, notification: notificationData });
+    } catch (err) {
+      console.error('Error in /follow:', err);
+      res.status(500).json({ message: 'Server error', error: err.message });
+    }
+  });
+
+  // Accept follow
+  router.post('/accept', async (req, res) => {
+    const { followerId, followingId } = req.body;
+    if (!followerId || !followingId) return res.status(400).json({ message: 'Invalid followerId or followingId' });
+
+    try {
+      const follow = await Follow.findOne({ follower: followerId, following: followingId });
+      if (!follow) return res.status(404).json({ message: 'Follow request not found' });
+
+      follow.status = true;
+      await follow.save();
+
+      const reciprocalFollow = await Follow.findOne({ follower: followingId, following: followerId });
+      if (!reciprocalFollow) {
+        await new Follow({ follower: followingId, following: followerId, userId: followingId, status: true }).save();
+      } else if (reciprocalFollow.status === false) {
+        reciprocalFollow.status = true;
+        await reciprocalFollow.save();
+      }
+
+      const notification = new Notification({
+        recipient: followerId,
+        sender: followingId,
+        type: 'follow_accepted',
+        message: `User ${followingId} has accepted your follow request`,
+        read: false,
+        data: { followerId, followingId },
+      });
+      await notification.save();
+
+      const notificationData = {
+        _id: notification._id,
+        recipient: followerId,
+        sender: followingId,
+        type: 'follow_accepted',
+        message: notification.message,
+        createdAt: notification.createdAt,
+        read: notification.read,
+        data: notification.data
+      };
+
+      io.to(followerId).emit('follow_accepted', notificationData);
+      io.to(`notifications_${followerId}`).emit('new_notification', notificationData);
+
+      try {
+        const followerUser = await User.findOne({ userId: followerId }).select('fcmToken username');
+        const followingUser = await User.findOne({ userId: followingId }).select('username');
+
+        if (followerUser && followerUser.fcmToken && followingUser) {
+          await sendPushNotification(
+            followerUser.fcmToken,
+            'Follow Request Accepted',
+            `${followingUser.username} has accepted your follow request`,
+            { type: 'follow_accepted', senderId: followingId, notificationId: notification._id.toString() }
+          );
+        }
+      } catch (pushErr) {
+        console.error('Push error on accept:', pushErr);
+      }
+
+      const unreadCount = await Notification.countDocuments({ recipient: followerId, read: false });
+      io.to(followerId).emit('notification_count_update', { userId: followerId, count: unreadCount });
+      io.to(`notifications_${followerId}`).emit('unread_count', unreadCount);
+
+      res.json({ message: 'Follow request accepted', follow, notification: notificationData });
+    } catch (err) {
+      console.error('Error in /accept:', err);
+      res.status(500).json({ message: 'Server error', error: err.message });
+    }
+  });
+
+  // Unfollow
+  router.delete('/unfollow', async (req, res) => {
+    const { followerId, followingId } = req.body;
+    if (!followerId || !followingId) return res.status(400).json({ message: 'Invalid followerId or followingId' });
+
+    try {
+      const result = await Follow.deleteMany({
+        $or: [
+          { follower: followerId, following: followingId },
+          { follower: followingId, following: followerId }
+        ]
+      });
+
+      if (result.deletedCount === 0) return res.status(404).json({ message: 'Follow relationship not found' });
+
+      const notification = new Notification({
+        recipient: followingId,
+        sender: followerId,
+        type: 'unfollow',
+        message: `User ${followerId} has unfollowed you`,
+        read: false,
+        data: { followerId, followingId },
+      });
+      await notification.save();
+
+      const notificationData = {
+        _id: notification._id,
+        recipient: followingId,
+        sender: followerId,
+        type: 'unfollow',
+        message: notification.message,
+        createdAt: notification.createdAt,
+        read: notification.read,
+        data: notification.data
+      };
+
+      io.to(followingId).emit('unfollow', notificationData);
+      io.to(`notifications_${followingId}`).emit('new_notification', notificationData);
+
+      try {
+        const recipientUser = await User.findOne({ userId: followingId }).select('fcmToken username');
+        const senderUser = await User.findOne({ userId: followerId }).select('username');
+
+        if (recipientUser && recipientUser.fcmToken && senderUser) {
+          await sendPushNotification(
+            recipientUser.fcmToken,
+            'Unfollowed',
+            `${senderUser.username} has unfollowed you`,
+            { type: 'unfollow', senderId: followerId, notificationId: notification._id.toString() }
+          );
+        }
+      } catch (pushErr) {
+        console.error('Push error on unfollow:', pushErr);
+      }
+
+      const unreadCount = await Notification.countDocuments({ recipient: followingId, read: false });
+      io.to(followingId).emit('notification_count_update', { userId: followingId, count: unreadCount });
+      io.to(`notifications_${followingId}`).emit('unread_count', unreadCount);
+
+      res.json({
+        message: 'Unfollowed successfully and data deleted',
+        deletedCount: result.deletedCount,
+        notification: notificationData
+      });
+    } catch (err) {
+      console.error('Error in /unfollow:', err);
+      res.status(500).json({ message: 'Server error', error: err.message });
+    }
+  });
+
+  // Check follow status
+  router.post('/status', async (req, res) => {
+    const { followerId, followingId } = req.body;
+    if (!followerId || !followingId) return res.status(400).json({ message: 'Invalid followerId or followingId' });
+
+    try {
+      const follow = await Follow.findOne({ follower: followerId, following: followingId });
+      if (!follow) return res.json({ status: null });
+      res.json({ status: follow.status });
+    } catch (err) {
+      console.error('Error in /status:', err);
+      res.status(500).json({ message: 'Server error', error: err.message });
+    }
+  });
+
+  // Get followers
+  router.get('/followers/:id', async (req, res) => {
+    const { id } = req.params;
+    if (!id || typeof id !== 'string') return res.status(400).json({ message: 'Invalid userId' });
+
+    try {
+      const followers = await Follow.find({ following: id, status: true }).select('follower');
+      const followerIds = followers.map((f) => f.follower);
+      res.json({ followers: followerIds });
+    } catch (err) {
+      console.error('Error in /followers:', err);
+      res.status(500).json({ message: 'Server error', error: err.message });
+    }
+  });
+
+  // Get following
+  router.get('/following/:id', async (req, res) => {
+    const { id } = req.params;
+    if (!id || typeof id !== 'string') return res.status(400).json({ message: 'Invalid userId' });
+
+    try {
+      const following = await Follow.find({ follower: id, status: true }).select('following');
+      const followingIds = following.map((f) => f.following);
+      res.json({ following: followingIds });
+    } catch (err) {
+      console.error('Error in /following:', err);
+      res.status(500).json({ message: 'Server error', error: err.message });
+    }
+  });
+
+  // Get pending requests
+  router.get('/pending/:userId', async (req, res) => {
+    const { userId } = req.params;
+    if (!userId || typeof userId !== 'string') return res.status(400).json({ message: 'Invalid userId' });
+
+    try {
+      const pendingRequests = await Follow.find({ following: userId, status: false })
+        .populate('follower', 'username profilePicture')
+        .select('follower createdAt');
+
+      res.json({ pendingRequests });
+    } catch (err) {
+      console.error('Error in /pending:', err);
+      res.status(500).json({ message: 'Server error', error: err.message });
+    }
+  });
+
+  // Get notifications
+  router.get('/notifications/:userId', async (req, res) => {
+    const { userId } = req.params;
+    if (!userId || typeof userId !== 'string') return res.status(400).json({ message: 'Invalid userId' });
+
+    try {
+      const notifications = await Notification.find({ recipient: userId })
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .populate('sender', 'username profilePicture');
+      res.json({ notifications });
+    } catch (err) {
+      console.error('Error in /notifications:', err);
+      res.status(500).json({ message: 'Server error', error: err.message });
+    }
+  });
+
+  // Mark notifications as read
+  router.post('/notifications/mark-read', async (req, res) => {
+    const { userId, notificationIds } = req.body;
+    if (!userId || typeof userId !== 'string') return res.status(400).json({ message: 'Invalid userId' });
+
+    try {
+      const updateQuery =
+        notificationIds && Array.isArray(notificationIds) && notificationIds.length > 0
+          ? { recipient: userId, _id: { $in: notificationIds }, read: false }
+          : { recipient: userId, read: false };
+
+      await Notification.updateMany(updateQuery, { read: true });
+
+      const unreadCount = await Notification.countDocuments({ recipient: userId, read: false });
+      io.to(userId).emit('notification_count_update', { userId, count: unreadCount });
+      io.to(`notifications_${userId}`).emit('unread_count', unreadCount);
+
+      res.json({ message: 'Notifications marked as read', unreadCount });
+    } catch (err) {
+      console.error('Error in /notifications/mark-read:', err);
+      res.status(500).json({ message: 'Server error', error: err.message });
+    }
+  });
+
+  router.post('/test-dynamic-push', async (req, res) => {
+  const { fcmToken, title, body } = req.body;
+
+  // Validate inputs
+  if (!fcmToken || !title || !body) {
+    return res.status(400).json({ message: 'FCM token, title, and body are required' });
+  }
+
+  try {
+    // Send a dynamic push notification with provided title and body
+    await sendPushNotification(
+      fcmToken,
+      title,
+      body,
+      { type: 'test', senderId: 'system', notificationId: 'test-' + Date.now() }
+    );
+
+    res.json({ message: 'Dynamic test push notification sent successfully' });
+  } catch (err) {
+    console.error('Error sending dynamic test push notification:', err);
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+
+  return router;
+}
+
+module.exports = followRouter;

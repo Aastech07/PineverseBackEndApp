@@ -1,0 +1,2380 @@
+import express from 'express';
+import http from 'http';
+import { Server } from 'socket.io';
+import cors from 'cors';
+import mysql from 'mysql2';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: '*', // Replace with frontend URL if in production
+  },
+});
+
+app.use(cors());
+app.use(express.json());
+
+// ✅ Create MySQL connection
+const db = mysql.createConnection({
+  host: '',     // Or your DB host
+  user: '',          // Your MySQL user
+  password: '',          // Your MySQL password
+  database: 'pineappleby',   // Your DB name
+});
+
+// ✅ Connect to MySQL
+db.connect((err) => {
+  if (err) {
+    console.error('❌ MySQL connection failed:', err);
+  } else {
+    console.log('✅ MySQL connected');
+  }
+});
+
+// ✅ Real-time messaging logic
+io.on('connection', (socket) => {
+  console.log('🟢 User connected');
+
+  socket.on('send_message', (data) => {
+    const { text, time, senderId } = data;
+
+    // Save message to MySQL
+    db.query(
+      'INSERT INTO messages (text, time, sender_id) VALUES (?, ?, ?)',
+      [text, time, senderId],
+      (err, result) => {
+        if (err) {
+          console.error('❌ Error inserting message:', err);
+        } else {
+          io.emit('receive_message', { ...data, id: result.insertId });
+        }
+      }
+    );
+  });
+
+  socket.on('disconnect', () => {
+    console.log('🔴 User disconnected');
+  });
+});
+
+// ✅ REST API to fetch chat history
+app.get('/messages', (req, res) => {
+  db.query('SELECT * FROM messages ORDER BY id DESC LIMIT 50', (err, results) => {
+    if (err) {
+      res.status(500).json({ error: 'Failed to fetch messages' });
+    } else {
+      res.json(results.reverse()); // reverse for ascending order
+    }
+  });
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import express from 'express';
+import http from 'http';
+import { Server } from 'socket.io';
+import cors from 'cors';
+import mongoose from 'mongoose';
+
+const app = express();
+const server = http.createServer(app);
+
+app.use(cors());
+app.use(express.json());
+
+// ✅ MongoDB Connection
+mongoose.connect('mongodb://127.0.0.1:27017/chatapp', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
+
+// ✅ Message Schema
+const messageSchema = new mongoose.Schema(
+  {
+    senderId: String,
+    receiverId: String,
+    text: String,
+    status: {
+      type: String,
+      enum: ['sent', 'delivered', 'seen'],
+      default: 'sent',
+    },
+    isRead: {
+      type: Boolean,
+      default: false,
+    },
+  },
+  { timestamps: true }
+);
+
+const Message = mongoose.model('Message', messageSchema);
+
+// ✅ Socket.IO Setup
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST'],
+  },
+});
+
+// ✅ Socket.IO Events
+io.on('connection', (socket) => {
+  console.log(`🟢 User connected: ${socket.id}`);
+
+  // ✅ Send Message
+  socket.on('send_message', async (data) => {
+    try {
+      const { senderId, receiverId, text } = data;
+      const newMessage = new Message({ senderId, receiverId, text });
+      const savedMessage = await newMessage.save();
+
+      const formattedTime = savedMessage.createdAt.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      io.emit('receive_message', {
+        _id: savedMessage._id,
+        senderId,
+        receiverId,
+        text,
+        timestamp: savedMessage.createdAt,
+        time: formattedTime,
+        status: 'sent',
+      });
+    } catch (err) {
+      console.error('❌ Error saving message:', err.message);
+    }
+  });
+
+  // ✅ Delivered
+  socket.on('message_delivered', async ({ messageId }) => {
+    try {
+      await Message.findByIdAndUpdate(messageId, { status: 'delivered' });
+      io.emit('message_status_update', { messageId, status: 'delivered' });
+    } catch (err) {
+      console.error('❌ Error updating delivered:', err.message);
+    }
+  });
+
+  // ✅ Seen
+  socket.on('message_seen', async ({ messageId }) => {
+    try {
+      await Message.findByIdAndUpdate(messageId, { status: 'seen', isRead: true });
+      io.emit('message_status_update', { messageId, status: 'seen' });
+    } catch (err) {
+      console.error('❌ Error updating seen:', err.message);
+    }
+  });
+
+  // ✅ Mark all messages as read in conversation
+  socket.on('mark_as_read', async ({ senderId, receiverId }) => {
+    try {
+      await Message.updateMany(
+        { senderId, receiverId, isRead: false },
+        { isRead: true, status: 'seen' }
+      );
+    } catch (err) {
+      console.error('❌ Error marking as read:', err.message);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    console.log(`🔴 User disconnected: ${socket.id}`);
+  });
+});
+
+// ✅ Get Messages Between Two Users
+app.post('/api/getMessages', async (req, res) => {
+  const { senderId, receiverId } = req.body;
+  try {
+    const messages = await Message.find({
+      $or: [
+        { senderId, receiverId },
+        { senderId: receiverId, receiverId: senderId },
+      ],
+    }).sort({ createdAt: 1 });
+
+    const formattedMessages = messages.map((msg) => ({
+      _id: msg._id,
+      senderId: msg.senderId,
+      receiverId: msg.receiverId,
+      text: msg.text,
+      status: msg.status,
+      isRead: msg.isRead,
+      timestamp: msg.createdAt,
+      time: msg.createdAt.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+    }));
+
+    res.json(formattedMessages);
+  } catch (err) {
+    console.error('❌ Failed to fetch messages:', err.message);
+    res.status(500).json({ error: 'Failed to fetch messages' });
+  }
+});
+
+// ✅ Get Recent Chats Like WhatsApp
+app.post('/api/chatUsers', async (req, res) => {
+  const { userId } = req.body;
+  try {
+    const messages = await Message.find({
+      $or: [{ senderId: userId }, { receiverId: userId }],
+    }).sort({ createdAt: -1 });
+
+    const uniquePairsMap = new Map();
+
+    messages.forEach((msg) => {
+      const participants = [msg.senderId, msg.receiverId].sort().join('_');
+      if (!uniquePairsMap.has(participants)) {
+        uniquePairsMap.set(participants, {
+          chatWith: msg.senderId === userId ? msg.receiverId : msg.senderId,
+          lastMessage: msg.text,
+          status: msg.status,
+          time: msg.createdAt.toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
+          timestamp: msg.createdAt,
+        });
+      }
+    });
+
+    res.json(Array.from(uniquePairsMap.values()));
+  } catch (err) {
+    console.error('❌ Failed to fetch chat users:', err.message);
+    res.status(500).json({ error: 'Failed to fetch chat users' });
+  }
+});
+
+// ✅ Get Unread Message Count Per Sender
+app.post('/api/unreadCounts', async (req, res) => {
+  const { userId } = req.body;
+
+  try {
+    const unread = await Message.aggregate([
+      { $match: { receiverId: userId, isRead: false } },
+      {
+        $group: {
+          _id: '$senderId',
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const unreadMap = {};
+    unread.forEach((item) => {
+      unreadMap[item._id] = item.count;
+    });
+
+    res.json(unreadMap);
+  } catch (err) {
+    console.error('❌ Error fetching unread counts:', err.message);
+    res.status(500).json({ error: 'Failed to fetch unread counts' });
+  }
+});
+
+// ✅ Get All Unique Chat Pairs (Optional)
+app.get('/api/userPairs', async (req, res) => {
+  try {
+    const messages = await Message.find({}).sort({ createdAt: 1 });
+    const pairChatsMap = new Map();
+
+    messages.forEach((msg) => {
+      const key = [msg.senderId, msg.receiverId].sort().join('_');
+      if (!pairChatsMap.has(key)) {
+        pairChatsMap.set(key, {
+          senderId: msg.senderId,
+          receiverId: msg.receiverId,
+          messages: [],
+        });
+      }
+      pairChatsMap.get(key).messages.push({
+        _id: msg._id,
+        senderId: msg.senderId,
+        receiverId: msg.receiverId,
+        text: msg.text,
+        status: msg.status,
+        isRead: msg.isRead,
+        timestamp: msg.createdAt,
+        time: msg.createdAt.toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+      });
+    });
+
+    res.json(Array.from(pairChatsMap.values()));
+  } catch (err) {
+    console.error('❌ Failed to get chat pairs:', err.message);
+    res.status(500).json({ error: 'Failed to get user pairs with messages' });
+  }
+});
+
+// ✅ Start Server
+server.listen(3000, () => {
+  console.log('🚀 Server running at http://localhost:3000');
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import express from 'express';
+import http from 'http';
+import { Server } from 'socket.io';
+import cors from 'cors';
+import mongoose from 'mongoose';
+import connectDB from './db/connectDB.js';
+import router from './routes/follow.js';
+const app = express();
+const server = http.createServer(app);
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+connectDB()
+app.use('/api',router)
+// ✅ Message Schema
+const messageSchema = new mongoose.Schema(
+  {
+    senderId: String,
+    receiverId: String,
+    text: String,
+    status: {
+      type: String,
+      enum: ['sent', 'delivered', 'seen'],
+      default: 'sent',
+    },
+    isRead: {
+      type: Boolean,
+      default: false,
+    },
+  },
+  { timestamps: true }
+);
+const Message = mongoose.model('Message', messageSchema);
+
+
+// ✅ Socket.IO Setup
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST'],
+  },
+});
+
+io.on('connection', (socket) => {
+  console.log(`🟢 User connected: ${socket.id}`);
+
+  socket.on('send_message', async (data) => {
+    try {
+      const { senderId, receiverId, text } = data;
+      const newMessage = new Message({ senderId, receiverId, text });
+      const savedMessage = await newMessage.save();
+
+      const formattedTime = savedMessage.createdAt.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      io.emit('receive_message', {
+        _id: savedMessage._id,
+        senderId,
+        receiverId,
+        text,
+        timestamp: savedMessage.createdAt,
+        time: formattedTime,
+        status: 'sent',
+      });
+    } catch (err) {
+      console.error('❌ Error saving message:', err.message);
+    }
+  });
+
+  socket.on('message_delivered', async ({ messageId }) => {
+    try {
+      await Message.findByIdAndUpdate(messageId, { status: 'delivered' });
+      io.emit('message_status_update', { messageId, status: 'delivered' });
+    } catch (err) {
+      console.error('❌ Error updating delivered:', err.message);
+    }
+  });
+
+  socket.on('message_seen', async ({ messageId }) => {
+    try {
+      await Message.findByIdAndUpdate(messageId, {
+        status: 'seen',
+        isRead: true,
+      });
+      io.emit('message_status_update', { messageId, status: 'seen' });
+    } catch (err) {
+      console.error('❌ Error updating seen:', err.message);
+    }
+  });
+
+  socket.on('mark_as_read', async ({ senderId, receiverId }) => {
+    try {
+      await Message.updateMany(
+        { senderId, receiverId, isRead: false },
+        { isRead: true, status: 'seen' }
+      );
+    } catch (err) {
+      console.error('❌ Error marking as read:', err.message);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    console.log(`🔴 User disconnected: ${socket.id}`);
+  });
+});
+
+// ✅ Get Messages with Grouping like WhatsApp
+app.post('/api/getMessages', async (req, res) => {
+  const { senderId, receiverId } = req.body;
+
+  const formatTime = (date) => {
+    return date.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  const formatDateLabel = (date) => {
+    const now = new Date();
+    const msgDate = new Date(date);
+
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+
+    const thisWeekStart = new Date();
+    thisWeekStart.setDate(today.getDate() - today.getDay());
+
+    const thisMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    const thisYearStart = new Date(today.getFullYear(), 0, 1);
+
+    const isToday = msgDate.toDateString() === today.toDateString();
+    const isYesterday = msgDate.toDateString() === yesterday.toDateString();
+    const isThisWeek = msgDate >= thisWeekStart;
+    const isThisMonth = msgDate >= thisMonthStart;
+    const isThisYear = msgDate >= thisYearStart && msgDate < thisMonthStart;
+    const isPreviousYears = msgDate < thisYearStart;
+
+    if (isToday) return 'Today';
+    if (isYesterday) return 'Yesterday';
+    if (isThisWeek) return 'This Week';
+    if (isThisMonth) return 'This Month';
+    if (isThisYear) {
+      return msgDate.toLocaleDateString(undefined, { month: 'long' });
+    }
+    if (isPreviousYears) {
+      return msgDate.toLocaleDateString(undefined, {
+        month: 'short',
+        year: 'numeric',
+      });
+    }
+
+    return msgDate.toLocaleDateString(); // fallback
+  };
+
+  try {
+    const messages = await Message.find({
+      $or: [
+        { senderId, receiverId },
+        { senderId: receiverId, receiverId: senderId },
+      ],
+    }).sort({ createdAt: 1 });
+
+    const groupedMessages = [];
+    let currentLabel = '';
+
+    messages.forEach((msg) => {
+      const label = formatDateLabel(msg.createdAt);
+
+      if (label !== currentLabel) {
+        groupedMessages.push({
+          type: 'label',
+          label,
+        });
+        currentLabel = label;
+      }
+
+      groupedMessages.push({
+        type: 'message',
+        _id: msg._id,
+        senderId: msg.senderId,
+        receiverId: msg.receiverId,
+        text: msg.text,
+        status: msg.status,
+        isRead: msg.isRead,
+        timestamp: msg.createdAt,
+        time: formatTime(msg.createdAt),
+      });
+    });
+
+    res.json(groupedMessages);
+  } catch (err) {
+    console.error('❌ Failed to fetch messages:', err.message);
+    res.status(500).json({ error: 'Failed to fetch messages' });
+  }
+});
+
+// ✅ Get Recent Chats Like WhatsApp
+app.post('/api/chatUsers', async (req, res) => {
+  const { userId } = req.body;
+  try {
+    const messages = await Message.find({
+      $or: [{ senderId: userId }, { receiverId: userId }],
+    }).sort({ createdAt: -1 });
+
+    const uniquePairsMap = new Map();
+
+    messages.forEach((msg) => {
+      const participants = [msg.senderId, msg.receiverId].sort().join('_');
+      if (!uniquePairsMap.has(participants)) {
+        uniquePairsMap.set(participants, {
+          chatWith: msg.senderId === userId ? msg.receiverId : msg.senderId,
+          lastMessage: msg.text,
+          status: msg.status,
+          time: msg.createdAt.toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
+          timestamp: msg.createdAt,
+        });
+      }
+    });
+
+    res.json(Array.from(uniquePairsMap.values()));
+  } catch (err) {
+    console.error('❌ Failed to fetch chat users:', err.message);
+    res.status(500).json({ error: 'Failed to fetch chat users' });
+  }
+});
+
+// ✅ Get Unread Message Count Per Sender
+app.post('/api/unreadCounts', async (req, res) => {
+  const { userId } = req.body;
+
+  try {
+    const unread = await Message.aggregate([
+      { $match: { receiverId: userId, isRead: false } },
+      {
+        $group: {
+          _id: '$senderId',
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const unreadMap = {};
+    unread.forEach((item) => {
+      unreadMap[item._id] = item.count;
+    });
+
+    res.json(unreadMap);
+  } catch (err) {
+    console.error('❌ Error fetching unread counts:', err.message);
+    res.status(500).json({ error: 'Failed to fetch unread counts' });
+  }
+});
+
+// ✅ Start Server
+server.listen(3000, () => {
+  console.log('🚀 Server running at http://localhost:3000');
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import express from 'express';
+import http from 'http';
+import { Server } from 'socket.io';
+import cors from 'cors';
+import mongoose from 'mongoose';
+import connectDB from './db/connectDB.js';
+import followRouter from './routes/follow.js';
+
+const app = express();
+const server = http.createServer(app);
+connectDB();
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// ✅ Message Schema
+const messageSchema = new mongoose.Schema(
+  {
+    senderId: String,
+    receiverId: String,
+    text: String,
+    status: {
+      type: String,
+      enum: ['sent', 'delivered', 'seen'],
+      default: 'sent',
+    },
+    isRead: {
+      type: Boolean,
+      default: false,
+    },
+  },
+  { timestamps: true }
+);
+const Message = mongoose.model('Message', messageSchema);
+
+// ✅ Socket.IO Setup
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST'],
+  },
+});
+
+app.use('/api', followRouter(io));
+
+
+io.on('connection', (socket) => {
+  console.log(`🟢 User connected: ${socket.id}`);
+
+  socket.on('send_message', async (data) => {
+    try {
+      const { senderId, receiverId, text } = data;
+      const newMessage = new Message({ senderId, receiverId, text });
+      const savedMessage = await newMessage.save();
+
+      const formattedTime = savedMessage.createdAt.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      io.emit('receive_message', {
+        _id: savedMessage._id,
+        senderId,
+        receiverId,
+        text,
+        timestamp: savedMessage.createdAt,
+        time: formattedTime,
+        status: 'sent',
+      });
+
+      const unreadCount = await Message.countDocuments({
+        receiverId,
+        senderId,
+        isRead: false,
+      });
+
+      io.emit('unread_count_update', {
+        userId: receiverId,
+        from: senderId,
+        count: unreadCount,
+      });
+
+    } catch (err) {
+      console.error('❌ Error saving message:', err.message);
+    }
+  });
+
+  socket.on('message_delivered', async ({ messageId }) => {
+    try {
+      await Message.findByIdAndUpdate(messageId, { status: 'delivered' });
+      io.emit('message_status_update', { messageId, status: 'delivered' });
+    } catch (err) {
+      console.error('❌ Error updating delivered:', err.message);
+    }
+  });
+
+  socket.on('message_seen', async ({ messageId }) => {
+    try {
+      const updated = await Message.findByIdAndUpdate(messageId, {
+        status: 'seen',
+        isRead: true,
+      });
+
+      io.emit('message_status_update', { messageId, status: 'seen' });
+
+      const unreadCount = await Message.countDocuments({
+        receiverId: updated.receiverId,
+        senderId: updated.senderId,
+        isRead: false,
+      });
+
+      io.emit('unread_count_update', {
+        userId: updated.receiverId,
+        from: updated.senderId,
+        count: unreadCount,
+      });
+    } catch (err) {
+      console.error('❌ Error updating seen:', err.message);
+    }
+  });
+
+  socket.on('mark_as_read', async ({ senderId, receiverId }) => {
+    try {
+      await Message.updateMany(
+        { senderId, receiverId, isRead: false },
+        { isRead: true, status: 'seen' }
+      );
+
+      io.emit('unread_count_update', {
+        userId: receiverId,
+        from: senderId,
+        count: 0,
+      });
+    } catch (err) {
+      console.error('❌ Error marking as read:', err.message);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    console.log(`🔴 User disconnected: ${socket.id}`);
+  });
+});
+
+// ✅ Get Messages with Grouping
+app.post('/getMessages', async (req, res) => {
+  const { senderId, receiverId } = req.body;
+
+  const formatTime = (date) => date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  const formatDateLabel = (date) => {
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+    const msgDate = new Date(date);
+
+    if (msgDate.toDateString() === today.toDateString()) return 'Today';
+    if (msgDate.toDateString() === yesterday.toDateString()) return 'Yesterday';
+
+    return msgDate.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: msgDate.getFullYear() !== today.getFullYear() ? 'numeric' : undefined,
+    });
+  };
+
+  try {
+    const messages = await Message.find({
+      $or: [
+        { senderId, receiverId },
+        { senderId: receiverId, receiverId: senderId },
+      ],
+    }).sort({ createdAt: 1 });
+
+    const groupedMessages = [];
+    let currentLabel = '';
+
+    messages.forEach((msg) => {
+      const label = formatDateLabel(msg.createdAt);
+      if (label !== currentLabel) {
+        groupedMessages.push({ type: 'label', label });
+        currentLabel = label;
+      }
+
+      groupedMessages.push({
+        type: 'message',
+        _id: msg._id,
+        senderId: msg.senderId,
+        receiverId: msg.receiverId,
+        text: msg.text,
+        status: msg.status,
+        isRead: msg.isRead,
+        timestamp: msg.createdAt,
+        time: formatTime(msg.createdAt),
+      });
+    });
+
+    res.json(groupedMessages);
+  } catch (err) {
+    console.error('❌ Failed to fetch messages:', err.message);
+    res.status(500).json({ error: 'Failed to fetch messages' });
+  }
+});
+
+// ✅ Get Chat Users with Unread Count (Updated)
+app.post('/chatUsers', async (req, res) => {
+  const { userId } = req.body;
+
+  try {
+    const messages = await Message.find({
+      $or: [{ senderId: userId }, { receiverId: userId }],
+    }).sort({ createdAt: -1 });
+
+    const uniqueChats = new Map();
+
+    messages.forEach((msg) => {
+      const participants = [msg.senderId, msg.receiverId].sort().join('_');
+      if (!uniqueChats.has(participants)) {
+        const chatWith = msg.senderId === userId ? msg.receiverId : msg.senderId;
+
+        uniqueChats.set(participants, {
+          chatWith,
+          lastMessage: msg.text,
+          status: msg.status,
+          time: msg.createdAt.toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
+          timestamp: msg.createdAt,
+          unreadCount: 0, // Placeholder
+        });
+      }
+    });
+
+    const unreadCounts = await Message.aggregate([
+      { $match: { receiverId: userId, isRead: false } },
+      {
+        $group: {
+          _id: '$senderId',
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const unreadMap = {};
+    unreadCounts.forEach((item) => {
+      unreadMap[item._id] = item.count;
+    });
+
+    const chatList = Array.from(uniqueChats.values()).map((chat) => ({
+      ...chat,
+      unreadCount: unreadMap[chat.chatWith] || 0,
+    }));
+
+    res.json(chatList);
+  } catch (err) {
+    console.error('❌ Failed to fetch chat users:', err.message);
+    res.status(500).json({ error: 'Failed to fetch chat users' });
+  }
+});
+
+// ✅ Unread Count API (for fallback)
+app.post('/unreadCounts', async (req, res) => {
+  const { userId } = req.body;
+
+  try {
+    const unread = await Message.aggregate([
+      { $match: { receiverId: userId, isRead: false } },
+      {
+        $group: {
+          _id: '$senderId',
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const unreadMap = {};
+    unread.forEach((item) => {
+      unreadMap[item._id] = item.count;
+    });
+
+    res.json(unreadMap);
+  } catch (err) {
+    console.error('❌ Error fetching unread counts:', err.message);
+    res.status(500).json({ error: 'Failed to fetch unread counts' });
+  }
+});
+
+server.listen(3000, '0.0.0.0', () => {
+  console.log('🚀 Server running at http://localhost:3000');
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import express from 'express';
+import http from 'http';
+import { Server } from 'socket.io';
+import cors from 'cors';
+import mongoose from 'mongoose';
+import connectDB from './db/connectDB.js';
+import followRouter from './routes/follow.js';
+import admin from './firebase.js';
+import User from './models/User.js'; // Ensure User model has `fcmToken`
+import locationRoutes from "./routes/locationRoutes.js";
+import bidRoutes from './routes/bidRoutes.js';
+
+const app = express();
+const server = http.createServer(app);
+connectDB();
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// ✅ Static FCM Token for Demo
+const DEMO_FCM_TOKEN = 'dmX7Q1g_SmWALfFTVL6tIC:APA91bGYxJ0uuCeZJOoVKGGenRuaFV-WkSuLkCErZOZ0ZHRC8ciTIUG8DxwSZS6rcTNB_pdxHSq8CS0fTUE406ebpG-iz8gZ0FwZreKhbB3O_ZxoRcAblEw';
+
+// ✅ Message Schema
+const messageSchema = new mongoose.Schema(
+  {
+    senderId: String,
+    receiverId: String,
+    text: String,
+    status: { type: String, enum: ['sent', 'delivered', 'seen'], default: 'sent' },
+    isRead: { type: Boolean, default: false },
+  },
+  { timestamps: true }
+);
+const Message = mongoose.model('Message', messageSchema);
+
+// ✅ Socket.IO Setup
+const io = new Server(server, {
+  cors: { origin: '*', methods: ['GET', 'POST'] },
+});
+app.use('/api', bidRoutes)
+
+app.use('/api', followRouter(io));
+
+app.use("/api", locationRoutes);
+
+// ✅ New Route: Update User's FCM Token
+app.post('/updateToken', async (req, res) => {
+  const { userId, fcmToken } = req.body;
+  try {
+    await User.findOneAndUpdate({ userId }, { fcmToken }, { upsert: true });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('❌ Error updating token:', err.message);
+    res.status(500).json({ error: 'Failed to update token' });
+  }
+});
+// ✅ New Route: Get User's FCM Token
+app.get('/getUserToken/:userId', async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const user = await User.findOne({ userId }).select('fcmToken');
+    res.json(user || { fcmToken: null });
+  } catch (err) {
+    console.error('❌ Error fetching token:', err.message);
+    res.status(500).json({ error: 'Failed to fetch token' });
+  }
+});
+/**
+ * Send Push Notification via FCM
+ */
+async function sendPushNotification(token, title, body, data = {}) {
+  try {
+    const targetToken = token || DEMO_FCM_TOKEN;
+    const message = {
+      token: targetToken,
+      notification: { title, body },
+      data: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v)])),
+      android: { priority: 'high', notification: { sound: 'default' } },
+      apns: { payload: { aps: { sound: 'default' } } },
+    };
+    await admin.messaging().send(message);
+    console.log(`✅ Push sent to ${targetToken}`);
+  } catch (error) {
+    console.error('❌ Push error:', error);
+  }
+}
+
+// ✅ Socket.IO events
+io.on('connection', (socket) => {
+  console.log(`🟢 User connected: ${socket.id}`);
+
+  socket.on('send_message', async (data) => {
+    try {
+      const { senderId, receiverId, text, username } = data; // ✅ Add username
+      const newMessage = new Message({ senderId, receiverId, text });
+      const savedMessage = await newMessage.save();
+
+      const formattedTime = savedMessage.createdAt.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      io.emit('receive_message', {
+        _id: savedMessage._id,
+        senderId,
+        receiverId,
+        text,
+        timestamp: savedMessage.createdAt,
+        time: formattedTime,
+        status: 'sent',
+      });
+
+      const unreadCount = await Message.countDocuments({
+        receiverId,
+        senderId,
+        isRead: false,
+      });
+
+      io.emit('unread_count_update', {
+        userId: receiverId,
+        from: senderId,
+        count: unreadCount,
+      });
+
+      // ✅ Send Push Notification with Username from Frontend
+      const recipientUser = await User.findOne({ userId: receiverId }).select('fcmToken');
+      await sendPushNotification(
+        recipientUser?.fcmToken || DEMO_FCM_TOKEN,
+        username || 'New Message', // Use username from frontend
+        text || 'You have a new message',
+        {
+          type: 'chat_message',
+          senderId,
+          receiverId,
+          messageId: savedMessage._id.toString(),
+          username: username || 'Unknown', // Include username in data
+        }
+      );
+
+    } catch (err) {
+      console.error('❌ Error saving message:', err.message);
+    }
+  });
+
+  socket.on('message_delivered', async ({ messageId }) => {
+    try {
+      await Message.findByIdAndUpdate(messageId, { status: 'delivered' });
+      io.emit('message_status_update', { messageId, status: 'delivered' });
+    } catch (err) {
+      console.error('❌ Error updating delivered:', err.message);
+    }
+  });
+
+  socket.on('message_seen', async ({ messageId }) => {
+    try {
+      const updated = await Message.findByIdAndUpdate(messageId, {
+        status: 'seen',
+        isRead: true,
+      });
+
+      io.emit('message_status_update', { messageId, status: 'seen' });
+
+      const unreadCount = await Message.countDocuments({
+        receiverId: updated.receiverId,
+        senderId: updated.senderId,
+        isRead: false,
+      });
+
+      io.emit('unread_count_update', {
+        userId: updated.receiverId,
+        from: updated.senderId,
+        count: unreadCount,
+      });
+    } catch (err) {
+      console.error('❌ Error updating seen:', err.message);
+    }
+  });
+
+  socket.on('mark_as_read', async ({ senderId, receiverId }) => {
+    try {
+      await Message.updateMany(
+        { senderId, receiverId, isRead: false },
+        { isRead: true, status: 'seen' }
+      );
+
+      io.emit('unread_count_update', {
+        userId: receiverId,
+        from: senderId,
+        count: 0,
+      });
+    } catch (err) {
+      console.error('❌ Error marking as read:', err.message);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    console.log(`🔴 User disconnected: ${socket.id}`);
+  });
+});
+
+// ✅ Get Messages with Grouping
+app.post('/getMessages', async (req, res) => {
+  const { senderId, receiverId } = req.body;
+  const formatTime = (date) => date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const formatDateLabel = (date) => {
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+    const msgDate = new Date(date);
+
+    if (msgDate.toDateString() === today.toDateString()) return 'Today';
+    if (msgDate.toDateString() === yesterday.toDateString()) return 'Yesterday';
+    return msgDate.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: msgDate.getFullYear() !== today.getFullYear() ? 'numeric' : undefined,
+    });
+  };
+
+  try {
+    const messages = await Message.find({
+      $or: [
+        { senderId, receiverId },
+        { senderId: receiverId, receiverId: senderId },
+      ],
+    }).sort({ createdAt: 1 });
+
+    const groupedMessages = [];
+    let currentLabel = '';
+
+    messages.forEach((msg) => {
+      const label = formatDateLabel(msg.createdAt);
+      if (label !== currentLabel) {
+        groupedMessages.push({ type: 'label', label });
+        currentLabel = label;
+      }
+      groupedMessages.push({
+        type: 'message',
+        _id: msg._id,
+        senderId: msg.senderId,
+        receiverId: msg.receiverId,
+        text: msg.text,
+        status: msg.status,
+        isRead: msg.isRead,
+        timestamp: msg.createdAt,
+        time: formatTime(msg.createdAt),
+      });
+    });
+
+    res.json(groupedMessages);
+  } catch (err) {
+    console.error('❌ Failed to fetch messages:', err.message);
+    res.status(500).json({ error: 'Failed to fetch messages' });
+  }
+});
+
+// ✅ Get Chat Users with Unread Count
+app.post('/chatUsers', async (req, res) => {
+  const { userId } = req.body;
+  try {
+    const messages = await Message.find({
+      $or: [{ senderId: userId }, { receiverId: userId }],
+    }).sort({ createdAt: -1 });
+
+    const uniqueChats = new Map();
+    messages.forEach((msg) => {
+      const participants = [msg.senderId, msg.receiverId].sort().join('_');
+      if (!uniqueChats.has(participants)) {
+        const chatWith = msg.senderId === userId ? msg.receiverId : msg.senderId;
+        uniqueChats.set(participants, {
+          chatWith,
+          lastMessage: msg.text,
+          status: msg.status,
+          time: msg.createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          timestamp: msg.createdAt,
+          unreadCount: 0,
+        });
+      }
+    });
+
+    const unreadCounts = await Message.aggregate([
+      { $match: { receiverId: userId, isRead: false } },
+      { $group: { _id: '$senderId', count: { $sum: 1 } } },
+    ]);
+
+    const unreadMap = {};
+    unreadCounts.forEach((item) => {
+      unreadMap[item._id] = item.count;
+    });
+
+    const chatList = Array.from(uniqueChats.values()).map((chat) => ({
+      ...chat,
+      unreadCount: unreadMap[chat.chatWith] || 0,
+    }));
+
+    res.json(chatList);
+  } catch (err) {
+    console.error('❌ Failed to fetch chat users:', err.message);
+    res.status(500).json({ error: 'Failed to fetch chat users' });
+  }
+});
+
+// ✅ Unread Count API
+app.post('/unreadCounts', async (req, res) => {
+  const { userId } = req.body;
+  try {
+    const unread = await Message.aggregate([
+      { $match: { receiverId: userId, isRead: false } },
+      { $group: { _id: '$senderId', count: { $sum: 1 } } },
+    ]);
+    const unreadMap = {};
+    unread.forEach((item) => { unreadMap[item._id] = item.count; });
+    res.json(unreadMap);
+  } catch (err) {
+    console.error('❌ Error fetching unread counts:', err.message);
+    res.status(500).json({ error: 'Failed to fetch unread counts' });
+  }
+});
+
+server.listen(3000, '0.0.0.0', () => {
+  console.log('🚀 Server running at http://localhost:3000');
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import express from 'express';
+import http from 'http';
+import { Server } from 'socket.io';
+import cors from 'cors';
+import mongoose from 'mongoose';
+import connectDB from './db/connectDB.js';
+import followRouter from './routes/follow.js';
+import admin from './firebase.js';
+import User from './models/User.js'; // Ensure User model has `fcmToken`
+import locationRoutes from "./routes/locationRoutes.js";
+import bidRoutes from './routes/bidRoutes.js';
+import { uploadpdf } from './upload_pdf/uploadpdf.js';
+const app = express();
+const server = http.createServer(app);
+connectDB();
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// ✅ Static FCM Token for Demo
+const DEMO_FCM_TOKEN = 'dmX7Q1g_SmWALfFTVL6tIC:APA91bGYxJ0uuCeZJOoVKGGenRuaFV-WkSuLkCErZOZ0ZHRC8ciTIUG8DxwSZS6rcTNB_pdxHSq8CS0fTUE406ebpG-iz8gZ0FwZreKhbB3O_ZxoRcAblEw';
+
+// ✅ Message Schema 
+const messageSchema = new mongoose.Schema(
+  {
+    senderId: String,
+    receiverId: String,
+    text: String,
+    status: { type: String, enum: ['sent', 'delivered', 'seen'], default: 'sent' },
+    isRead: { type: Boolean, default: false },
+  },
+  { timestamps: true }
+);
+const Message = mongoose.model('Message', messageSchema);
+
+// ✅ Socket.IO Setup
+const io = new Server(server, {
+  cors: { origin: '*', methods: ['GET', 'POST'] },
+});
+
+app.use("/", uploadpdf);
+
+app.use('/api', bidRoutes)
+
+app.use('/api', followRouter(io));
+
+app.use("/api", locationRoutes);
+
+// ✅ New Route: Update User's FCM Token
+app.post('/updateToken', async (req, res) => {
+  const { userId, fcmToken } = req.body;
+  try {
+    await User.findOneAndUpdate({ userId }, { fcmToken }, { upsert: true });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('❌ Error updating token:', err.message);
+    res.status(500).json({ error: 'Failed to update token' });
+  }
+});
+// ✅ New Route: Get User's FCM Token
+app.get('/getUserToken/:userId', async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const user = await User.findOne({ userId }).select('fcmToken');
+    res.json(user || { fcmToken: null });
+  } catch (err) {
+    console.error('❌ Error fetching token:', err.message);
+    res.status(500).json({ error: 'Failed to fetch token' });
+  }
+});
+/**
+ * Send Push Notification via FCM
+ */
+async function sendPushNotification(token, title, body, data = {}) {
+  try {
+    const targetToken = token || DEMO_FCM_TOKEN;
+    const message = {
+      token: targetToken,
+      notification: { title, body },
+      data: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v)])),
+      android: { priority: 'high', notification: { sound: 'default' } },
+      apns: { payload: { aps: { sound: 'default' } } },
+    };
+    await admin.messaging().send(message);
+    console.log(`✅ Push sent to ${targetToken}`);
+  } catch (error) {
+    console.error('❌ Push error:', error);
+  }
+}
+
+// ✅ Socket.IO events
+io.on('connection', (socket) => {
+  console.log(`🟢 User connected: ${socket.id}`);
+
+  socket.on('send_message', async (data) => {
+    try {
+      const { senderId, receiverId, text, username } = data; // ✅ Add username
+      const newMessage = new Message({ senderId, receiverId, text });
+      const savedMessage = await newMessage.save();
+
+      const formattedTime = savedMessage.createdAt.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      io.emit('receive_message', {
+        _id: savedMessage._id,
+        senderId,
+        receiverId,
+        text,
+        timestamp: savedMessage.createdAt,
+        time: formattedTime,
+        status: 'sent',
+      });
+
+      const unreadCount = await Message.countDocuments({
+        receiverId,
+        senderId,
+        isRead: false,
+      });
+
+      io.emit('unread_count_update', {
+        userId: receiverId,
+        from: senderId,
+        count: unreadCount,
+      });
+
+      // ✅ Send Push Notification with Username from Frontend
+      const recipientUser = await User.findOne({ userId: receiverId }).select('fcmToken');
+      await sendPushNotification(
+        recipientUser?.fcmToken || DEMO_FCM_TOKEN,
+        username || 'New Message', // Use username from frontend
+        text || 'You have a new message',
+        {
+          type: 'chat_message',
+          senderId,
+          receiverId,
+          messageId: savedMessage._id.toString(),
+          username: username || 'Unknown', // Include username in data
+        }
+      );
+
+    } catch (err) {
+      console.error('❌ Error saving message:', err.message);
+    }
+  });
+
+  socket.on('message_delivered', async ({ messageId }) => {
+    try {
+      await Message.findByIdAndUpdate(messageId, { status: 'delivered' });
+      io.emit('message_status_update', { messageId, status: 'delivered' });
+    } catch (err) {
+      console.error('❌ Error updating delivered:', err.message);
+    }
+  });
+
+  socket.on('message_seen', async ({ messageId }) => {
+    try {
+      const updated = await Message.findByIdAndUpdate(messageId, {
+        status: 'seen',
+        isRead: true,
+      });
+
+      io.emit('message_status_update', { messageId, status: 'seen' });
+
+      const unreadCount = await Message.countDocuments({
+        receiverId: updated.receiverId,
+        senderId: updated.senderId,
+        isRead: false,
+      });
+
+      io.emit('unread_count_update', {
+        userId: updated.receiverId,
+        from: updated.senderId,
+        count: unreadCount,
+      });
+    } catch (err) {
+      console.error('❌ Error updating seen:', err.message);
+    }
+  });
+
+  socket.on('mark_as_read', async ({ senderId, receiverId }) => {
+    try {
+      await Message.updateMany(
+        { senderId, receiverId, isRead: false },
+        { isRead: true, status: 'seen' }
+      );
+
+      io.emit('unread_count_update', {
+        userId: receiverId,
+        from: senderId,
+        count: 0,
+      });
+    } catch (err) {
+      console.error('❌ Error marking as read:', err.message);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    console.log(`🔴 User disconnected: ${socket.id}`);
+  });
+});
+
+// ✅ Get Messages with Grouping
+app.post('/getMessages', async (req, res) => {
+  const { senderId, receiverId } = req.body;
+  const formatTime = (date) => date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const formatDateLabel = (date) => {
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+    const msgDate = new Date(date);
+
+    if (msgDate.toDateString() === today.toDateString()) return 'Today';
+    if (msgDate.toDateString() === yesterday.toDateString()) return 'Yesterday';
+    return msgDate.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: msgDate.getFullYear() !== today.getFullYear() ? 'numeric' : undefined,
+    });
+  };
+
+  try {
+    const messages = await Message.find({
+      $or: [
+        { senderId, receiverId },
+        { senderId: receiverId, receiverId: senderId },
+      ],
+    }).sort({ createdAt: 1 });
+
+    const groupedMessages = [];
+    let currentLabel = '';
+
+    messages.forEach((msg) => {
+      const label = formatDateLabel(msg.createdAt);
+      if (label !== currentLabel) {
+        groupedMessages.push({ type: 'label', label });
+        currentLabel = label;
+      }
+      groupedMessages.push({
+        type: 'message',
+        _id: msg._id,
+        senderId: msg.senderId,
+        receiverId: msg.receiverId,
+        text: msg.text,
+        status: msg.status,
+        isRead: msg.isRead,
+        timestamp: msg.createdAt,
+        time: formatTime(msg.createdAt),
+      });
+    });
+
+    res.json(groupedMessages);
+  } catch (err) {
+    console.error('❌ Failed to fetch messages:', err.message);
+    res.status(500).json({ error: 'Failed to fetch messages' });
+  }
+});
+
+// ✅ Get Chat Users with Unread Count
+app.post('/chatUsers', async (req, res) => {
+  const { userId } = req.body;
+  try {
+    const messages = await Message.find({
+      $or: [{ senderId: userId }, { receiverId: userId }],
+    }).sort({ createdAt: -1 });
+
+    const uniqueChats = new Map();
+    messages.forEach((msg) => {
+      const participants = [msg.senderId, msg.receiverId].sort().join('_');
+      if (!uniqueChats.has(participants)) {
+        const chatWith = msg.senderId === userId ? msg.receiverId : msg.senderId;
+        uniqueChats.set(participants, {
+          chatWith,
+          lastMessage: msg.text,
+          status: msg.status,
+          time: msg.createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          timestamp: msg.createdAt,
+          unreadCount: 0,
+        });
+      }
+    });
+
+    const unreadCounts = await Message.aggregate([
+      { $match: { receiverId: userId, isRead: false } },
+      { $group: { _id: '$senderId', count: { $sum: 1 } } },
+    ]);
+
+    const unreadMap = {};
+    unreadCounts.forEach((item) => {
+      unreadMap[item._id] = item.count;
+    });
+
+    const chatList = Array.from(uniqueChats.values()).map((chat) => ({
+      ...chat,
+      unreadCount: unreadMap[chat.chatWith] || 0,
+    }));
+
+    res.json(chatList);
+  } catch (err) {
+    console.error('❌ Failed to fetch chat users:', err.message);
+    res.status(500).json({ error: 'Failed to fetch chat users' });
+  }
+});
+
+// ✅ Unread Count API
+app.post('/unreadCounts', async (req, res) => {
+  const { userId } = req.body;
+  try {
+    const unread = await Message.aggregate([
+      { $match: { receiverId: userId, isRead: false } },
+      { $group: { _id: '$senderId', count: { $sum: 1 } } },
+    ]);
+    const unreadMap = {};
+    unread.forEach((item) => { unreadMap[item._id] = item.count; });
+    res.json(unreadMap);
+  } catch (err) {
+    console.error('❌ Error fetching unread counts:', err.message);
+    res.status(500).json({ error: 'Failed to fetch unread counts' });
+  }
+});
+
+server.listen(3000, '0.0.0.0', () => {
+  console.log('🚀 Server running at http://localhost:3000');
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import express from 'express';
+import http from 'http';
+import { Server } from 'socket.io';
+import cors from 'cors';
+import mongoose from 'mongoose';
+import connectDB from './db/connectDB.js';
+import followRouter from './routes/follow.js';
+import admin from './firebase.js';
+import User from './models/User.js';
+import locationRoutes from './routes/locationRoutes.js';
+import bidRoutes from './routes/BidRoutes.js';
+import { uploadpdf } from './upload_pdf/uploadpdf.js';
+import { Client } from '@googlemaps/google-maps-services-js';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: '*', methods: ['GET', 'POST'] },
+});
+
+connectDB();
+const mapsClient = new Client({});
+
+app.use(cors());
+app.use(express.json());
+
+app.use('/', uploadpdf);
+app.use('/api', bidRoutes);
+app.use('/api', followRouter(io));
+app.use('/api', locationRoutes);
+
+// ✅ Message Schema (unchanged)
+const messageSchema = new mongoose.Schema(
+  {
+    senderId: String,
+    receiverId: String,
+    text: String,
+    status: { type: String, enum: ['sent', 'delivered', 'seen'], default: 'sent' },
+    isRead: { type: Boolean, default: false },
+  },
+  { timestamps: true }
+);
+const Message = mongoose.model('Message', messageSchema);
+
+const DEMO_FCM_TOKEN = 'dmX7Q1g_SmWALfFTVL6tIC:APA91bGYxJ0uuCeZJOoVKGGenRuaFV-WkSuLkCErZOZ0ZHRC8ciTIUG8DxwSZS6rcTNB_pdxHSq8CS0fTUE406ebpG-iz8gZ0FwZreKhbB3O_ZxoRcAblEw';
+
+// ✅ Send Push Notification (unchanged)
+async function sendPushNotification(token, title, body, data = {}) {
+  try {
+    const targetToken = token || DEMO_FCM_TOKEN;
+    const message = {
+      token: targetToken,
+      notification: { title, body },
+      data: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v)])),
+      android: { priority: 'high', notification: { sound: 'default' } },
+      apns: { payload: { aps: { sound: 'default' } } },
+    };
+    await admin.messaging().send(message);
+    console.log(`✅ Push sent to ${targetToken}`);
+  } catch (error) {
+    console.error('❌ Push error:', error.message);
+  }
+}
+
+// ✅ Existing Routes (unchanged)
+app.post('/updateToken', async (req, res) => {
+  const { userId, fcmToken } = req.body;
+  try {
+    await User.findOneAndUpdate({ userId }, { fcmToken }, { upsert: true });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('❌ Error updating token:', err.message);
+    res.status(500).json({ error: 'Failed to update token' });
+  }
+});
+
+app.get('/getUserToken/:userId', async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const user = await User.findOne({ userId }).select('fcmToken');
+    res.json(user || { fcmToken: null });
+  } catch (err) {
+    console.error('❌ Error fetching token:', err.message);
+    res.status(500).json({ error: 'Failed to fetch token' });
+  }
+});
+
+app.post('/updateLocation', async (req, res) => {
+  const { userId, lat, lng } = req.body;
+  try {
+    await User.findOneAndUpdate(
+      { userId },
+      { location: { lat, lng } },
+      { upsert: true }
+    );
+    io.emit('location_update', { userId, lat, lng });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('❌ Error updating location:', err.message);
+    res.status(500).json({ error: 'Failed to update location' });
+  }
+});
+
+app.post('/nearbyUsers', async (req, res) => {
+  const { userId, radius = 10000 } = req.body;
+  try {
+    const user = await User.findOne({ userId }).select('location');
+    if (!user || !user.location) {
+      return res.status(404).json({ error: 'User or location not found' });
+    }
+
+    const nearbyUsers = await User.find({
+      userId: { $ne: userId },
+      location: {
+        $near: {
+          $geometry: { type: 'Point', coordinates: [user.location.lng, user.location.lat] },
+          $maxDistance: radius,
+        },
+      },
+    }).select('userId location');
+
+    res.json(nearbyUsers);
+  } catch (err) {
+    console.error('❌ Error fetching nearby users:', err.message);
+    res.status(500).json({ error: 'Failed to fetch nearby users' });
+  }
+});
+
+app.get('/placeDetails/:placeId', async (req, res) => {
+  const { placeId } = req.params;
+  try {
+    const response = await mapsClient.placeDetails({
+      params: {
+        place_id: placeId,
+        key: process.env.MAPS_API_KEY,
+      },
+      timeout: 1000,
+    });
+    res.json(response.data.result);
+  } catch (err) {
+    console.error('❌ Error fetching place details:', err.message);
+    res.status(500).json({ error: 'Failed to fetch place details' });
+  }
+});
+
+app.get('/geocode', async (req, res) => {
+  const { address } = req.query;
+  if (!address) {
+    return res.status(400).json({ error: 'Address is required' });
+  }
+  try {
+    const response = await mapsClient.geocode({
+      params: {
+        address,
+        key: process.env.MAPS_API_KEY,
+      },
+      timeout: 1000,
+    });
+    res.json(response.data.results[0]?.geometry.location || {});
+  } catch (err) {
+    console.error('❌ Error geocoding:', err.message);
+    res.status(500).json({ error: 'Failed to geocode' });
+  }
+});
+
+app.get('/elevation', async (req, res) => {
+  const { lat, lng } = req.query;
+  if (!lat || !lng) {
+    return res.status(400).json({ error: 'Latitude and longitude are required' });
+  }
+  try {
+    const response = await mapsClient.elevation({
+      params: {
+        locations: [{ lat: parseFloat(lat), lng: parseFloat(lng) }],
+        key: process.env.MAPS_API_KEY,
+      },
+      timeout: 1000,
+    });
+    res.json({ elevation: response.data.results[0]?.elevation || 0 });
+  } catch (err) {
+    console.error('❌ Error fetching elevation:', err.message);
+    res.status(500).json({ error: 'Failed to fetch elevation' });
+  }
+});
+
+// ✅ New Route: Search Nearby Places
+app.post('/searchNearbyPlaces', async (req, res) => {
+  const { lat, lng, radius = 5000, type = 'point_of_interest' } = req.body;
+  if (!lat || !lng) {
+    return res.status(400).json({ error: 'Latitude and longitude are required' });
+  }
+  try {
+    const response = await mapsClient.placesNearby({
+      params: {
+        location: { lat: parseFloat(lat), lng: parseFloat(lng) },
+        radius: parseInt(radius),
+        type,
+        key: process.env.MAPS_API_KEY,
+      },
+      timeout: 1000,
+    });
+
+    // Return top 5 nearest places for simplicity
+    const places = response.data.results.slice(0, 5).map((place) => ({
+      place_id: place.place_id,
+      name: place.name,
+      vicinity: place.vicinity,
+      location: place.geometry.location,
+      types: place.types,
+    }));
+    res.json(places);
+  } catch (err) {
+    console.error('❌ Error fetching nearby places:', err.message);
+    res.status(500).json({ error: 'Failed to fetch nearby places' });
+  }
+});
+
+// ✅ New Route: Search Places by Keyword
+app.get('/searchPlacesByKeyword', async (req, res) => {
+  const { keyword, lat, lng } = req.query;
+  if (!keyword) {
+    return res.status(400).json({ error: 'Keyword is required' });
+  }
+  try {
+    const params = {
+      query: keyword,
+      key: process.env.MAPS_API_KEY,
+    };
+    if (lat && lng) {
+      params.location = { lat: parseFloat(lat), lng: parseFloat(lng) };
+      params.radius = 10000; // 10km radius for location-biased results
+    }
+    const response = await mapsClient.textSearch({
+      params,
+      timeout: 1000,
+    });
+
+    // Return top 5 results for simplicity
+    const places = response.data.results.slice(0, 5).map((place) => ({
+      place_id: place.place_id,
+      name: place.name,
+      formatted_address: place.formatted_address,
+      location: place.geometry.location,
+      types: place.types,
+    }));
+    
+    // Auto-select the first result if available
+    const selectedPlace = places[0] || null;
+    res.json({ results: places, selected: selectedPlace });
+  } catch (err) {
+    console.error('❌ Error searching places:', err.message);
+    res.status(500).json({ error: 'Failed to search places' });
+  }
+});
+
+// ✅ Socket.IO Events (unchanged except for location sharing)
+io.on('connection', (socket) => {
+  console.log(`🟢 User connected: ${socket.id}`);
+
+  socket.on('join', ({ userId }) => {
+    socket.join(userId);
+    console.log(`User ${userId} joined their room`);
+  });
+
+  socket.on('share_location', async ({ userId, lat, lng }) => {
+    try {
+      await User.findOneAndUpdate(
+        { userId },
+        { location: { lat, lng } },
+        { upsert: true }
+      );
+      io.emit('location_update', { userId, lat, lng });
+
+      const nearbyUsers = await User.find({
+        userId: { $ne: userId },
+        location: {
+          $near: {
+            $geometry: { type: 'Point', coordinates: [lng, lat] },
+            $maxDistance: 10000,
+          },
+        },
+      }).select('userId fcmToken');
+
+      nearbyUsers.forEach(async (nearbyUser) => {
+        await sendPushNotification(
+          nearbyUser.fcmToken || DEMO_FCM_TOKEN,
+          'Nearby User Update',
+          `${userId} shared their location near you!`,
+          { type: 'location_update', userId, lat, lng }
+        );
+      });
+    } catch (err) {
+      console.error('❌ Error sharing location:', err.message);
+    }
+  });
+
+  socket.on('send_message', async (data) => {
+    try {
+      const { senderId, receiverId, text, username } = data;
+      const newMessage = new Message({ senderId, receiverId, text });
+      const savedMessage = await newMessage.save();
+
+      const formattedTime = savedMessage.createdAt.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      io.emit('receive_message', {
+        _id: savedMessage._id,
+        senderId,
+        receiverId,
+        text,
+        timestamp: savedMessage.createdAt,
+        time: formattedTime,
+        status: 'sent',
+      });
+
+      const unreadCount = await Message.countDocuments({
+        receiverId,
+        senderId,
+        isRead: false,
+      });
+
+      io.to(receiverId).emit('unread_count_update', {
+        userId: receiverId,
+        from: senderId,
+        count: unreadCount,
+      });
+
+      const recipientUser = await User.findOne({ userId: receiverId }).select('fcmToken');
+      await sendPushNotification(
+        recipientUser?.fcmToken || DEMO_FCM_TOKEN,
+        username || 'New Message',
+        text || 'You have a new message',
+        {
+          type: 'chat_message',
+          senderId,
+          receiverId,
+          messageId: savedMessage._id.toString(),
+          username: username || 'Unknown',
+        }
+      );
+    } catch (err) {
+      console.error('❌ Error saving message:', err.message);
+    }
+  });
+
+  socket.on('message_delivered', async ({ messageId }) => {
+    try {
+      await Message.findByIdAndUpdate(messageId, { status: 'delivered' });
+      io.emit('message_status_update', { messageId, status: 'delivered' });
+    } catch (err) {
+      console.error('❌ Error updating delivered:', err.message);
+    }
+  });
+
+  socket.on('message_seen', async ({ messageId }) => {
+    try {
+      const updated = await Message.findByIdAndUpdate(messageId, {
+        status: 'seen',
+        isRead: true,
+      });
+
+      io.emit('message_status_update', { messageId, status: 'seen' });
+
+      const unreadCount = await Message.countDocuments({
+        receiverId: updated.receiverId,
+        senderId: updated.senderId,
+        isRead: false,
+      });
+
+      io.to(updated.receiverId).emit('unread_count_update', {
+        userId: updated.receiverId,
+        from: updated.senderId,
+        count: unreadCount,
+      });
+    } catch (err) {
+      console.error('❌ Error updating seen:', err.message);
+    }
+  });
+
+  socket.on('mark_as_read', async ({ senderId, receiverId }) => {
+    try {
+      await Message.updateMany(
+        { senderId, receiverId, isRead: false },
+        { isRead: true, status: 'seen' }
+      );
+
+      io.to(receiverId).emit('unread_count_update', {
+        userId: receiverId,
+        from: senderId,
+        count: 0,
+      });
+    } catch (err) {
+      console.error('❌ Error marking as read:', err.message);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    console.log(`🔴 User disconnected: ${socket.id}`);
+  });
+});
+
+// ✅ Existing Message and Chat Routes (unchanged)
+app.post('/getMessages', async (req, res) => {
+  const { senderId, receiverId } = req.body;
+  const formatTime = (date) => date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const formatDateLabel = (date) => {
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+    const msgDate = new Date(date);
+
+    if (msgDate.toDateString() === today.toDateString()) return 'Today';
+    if (msgDate.toDateString() === yesterday.toDateString()) return 'Yesterday';
+    return msgDate.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: msgDate.getFullYear() !== today.getFullYear() ? 'numeric' : undefined,
+    });
+  };
+
+  try {
+    const messages = await Message.find({
+      $or: [
+        { senderId, receiverId },
+        { senderId: receiverId, receiverId: senderId },
+      ],
+    }).sort({ createdAt: 1 });
+
+    const groupedMessages = [];
+    let currentLabel = '';
+
+    messages.forEach((msg) => {
+      const label = formatDateLabel(msg.createdAt);
+      if (label !== currentLabel) {
+        groupedMessages.push({ type: 'label', label });
+        currentLabel = label;
+      }
+      groupedMessages.push({
+        type: 'message',
+        _id: msg._id,
+        senderId: msg.senderId,
+        receiverId: msg.receiverId,
+        text: msg.text,
+        status: msg.status,
+        isRead: msg.isRead,
+        timestamp: msg.createdAt,
+        time: formatTime(msg.createdAt),
+      });
+    });
+
+    res.json(groupedMessages);
+  } catch (err) {
+    console.error('❌ Failed to fetch messages:', err.message);
+    res.status(500).json({ error: 'Failed to fetch messages' });
+  }
+});
+
+app.post('/chatUsers', async (req, res) => {
+  const { userId } = req.body;
+  try {
+    const messages = await Message.find({
+      $or: [{ senderId: userId }, { receiverId: userId }],
+    }).sort({ createdAt: -1 });
+
+    const uniqueChats = new Map();
+    messages.forEach((msg) => {
+      const participants = [msg.senderId, msg.receiverId].sort().join('_');
+      if (!uniqueChats.has(participants)) {
+        const chatWith = msg.senderId === userId ? msg.receiverId : msg.senderId;
+        uniqueChats.set(participants, {
+          chatWith,
+          lastMessage: msg.text,
+          status: msg.status,
+          time: msg.createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          timestamp: msg.createdAt,
+          unreadCount: 0,
+        });
+      }
+    });
+
+    const unreadCounts = await Message.aggregate([
+      { $match: { receiverId: userId, isRead: false } },
+      { $group: { _id: '$senderId', count: { $sum: 1 } } },
+    ]);
+
+    const unreadMap = {};
+    unreadCounts.forEach((item) => {
+      unreadMap[item._id] = item.count;
+    });
+
+    const chatList = Array.from(uniqueChats.values()).map((chat) => ({
+      ...chat,
+      unreadCount: unreadMap[chat.chatWith] || 0,
+    }));
+
+    res.json(chatList);
+  } catch (err) {
+    console.error('❌ Failed to fetch chat users:', err.message);
+    res.status(500).json({ error: 'Failed to fetch chat users' });
+  }
+});
+
+app.post('/unreadCounts', async (req, res) => {
+  const { userId } = req.body;
+  try {
+    const unread = await Message.aggregate([
+      { $match: { receiverId: userId, isRead: false } },
+      { $group: { _id: '$senderId', count: { $sum: 1 } } },
+    ]);
+    const unreadMap = {};
+    unread.forEach((item) => {
+      unreadMap[item._id] = item.count;
+    });
+    res.json(unreadMap);
+  } catch (err) {
+    console.error('❌ Error fetching unread counts:', err.message);
+    res.status(500).json({ error: 'Failed to fetch unread counts' });
+  }
+});
+
+server.listen(3000, '0.0.0.0', () => {
+  console.log('🚀 Server running at http://localhost:3000');
+});
