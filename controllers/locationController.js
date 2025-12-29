@@ -5,7 +5,7 @@ import Location from "../models/locationModel.js";
 // ======================
 export const createLocation = async (req, res) => {
   try {
-    const { userId, pickup, drop, jobDetails, inventory, serviceDetails, bids } = req.body;
+    const { userId, pickup, drop, jobDetails, inventory, serviceDetails, bids, image, name } = req.body;
 
     const newLocation = new Location({
       userId,
@@ -20,6 +20,8 @@ export const createLocation = async (req, res) => {
       jobDetails,
       inventory,
       serviceDetails,
+      image,
+      name,
       bids,
     });
 

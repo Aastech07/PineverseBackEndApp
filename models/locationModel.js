@@ -11,6 +11,14 @@ const locationSchema = new mongoose.Schema({
     type: String, // Simple string store
     required: true, // Required field
   },
+  image: {
+    type: String,
+    required: true,
+  },
+  name: {
+    type: String,
+    required: true,
+  },
   pickup: {
     location: { type: String },
     city: { type: String },
@@ -18,7 +26,6 @@ const locationSchema = new mongoose.Schema({
     addressLine1: { type: String },
     addressLine2: { type: String },
     pincode: { type: String },
-  
   },
   drop: {
     location: { type: String },
@@ -31,10 +38,10 @@ const locationSchema = new mongoose.Schema({
   jobDetails: {
     dateOfPacking: { type: Date },
     propertySize: { type: String },
-    status: { 
-      type: String, 
-      enum: ["Posted", "Bid Received", "In Progress", "Completed"], 
-      default: "Posted" 
+    status: {
+      type: String,
+      enum: ["Posted", "Bid Received", "In Progress", "Completed"],
+      default: "Posted"
     }, // Job status
     progressStep: { type: Number, min: 0, max: 3, default: 0 }, // Progress indicator
   },
@@ -49,15 +56,15 @@ const locationSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }, // Track updates
   bids: [{
     quotation: { type: Number, required: true }, // Send a Quotation field
-    status: { 
-      type: String, 
-      enum: ["Negotiable", "Non-Negotiable"], 
-      default: "Negotiable" 
+    status: {
+      type: String,
+      enum: ["Negotiable", "Non-Negotiable"],
+      default: "Negotiable"
     }, // Status (Negotiable/Non-Negotiable)
-    validityOfQuote: { 
-      type: String, 
-      enum: ["7 Days", "10 Days", "1 Month"], 
-      default: "7 Days" 
+    validityOfQuote: {
+      type: String,
+      enum: ["7 Days", "10 Days", "1 Month"],
+      default: "7 Days"
     }, // Validity of Quote
     advancePayment: { type: Number, min: 0, default: 0 }, // Advance payment percentage or amount
     noteToCustomer: { type: String, default: "" }, // Leave a note to the customer
