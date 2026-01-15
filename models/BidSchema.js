@@ -13,7 +13,50 @@ const bidSchema = new mongoose.Schema(
       default: 'Negotiable',
       required: true,
     },
-    recipientDetails:{
+
+    costBreakdown: {
+      baseTransport: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      packingCharges: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      loadingUnloadingCharges: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      insuranceCharges: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      storageCharges: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      dismantlingCharges: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      otherCharges: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      totalAmount: {
+        type: Number,
+        required: true,
+        min: 0,
+      },
+    },
+    recipientDetails: {
       name: { type: String, required: true },
       image: { type: String, required: true },
       phone: {
@@ -123,11 +166,11 @@ const bidSchema = new mongoose.Schema(
 
     ActiveUserStatus: {
       type: String,
-      enum: ['In Progress', 'Quote Sent', 'Cancelled', 'Completed','Rejected'],
+      enum: ['In Progress', 'Quote Sent', 'Cancelled', 'Completed', 'Rejected'],
       default: 'In Progress',
     },
-   
-    
+
+
   },
   { timestamps: true }
 );

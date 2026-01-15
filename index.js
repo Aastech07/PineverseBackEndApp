@@ -402,7 +402,7 @@ io.on('connection', (socket) => {
 
 app.post('/getMessages', async (req, res) => {
   const { senderId, receiverId } = req.body;
-
+  
   const formatTime = (date) =>
     date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 

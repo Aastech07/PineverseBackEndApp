@@ -17,6 +17,35 @@ const isValidRecipientDetails = (rd) => {
   return true;
 };
 
+
+const BID_SELECT_FIELDS = `
+  quotation
+  status
+  validityOfQuote
+  advancePayment
+  noteToCustomer
+  bidderId
+  recipientId
+  jobId
+  activeStatus
+  submittedAt
+
+  costBreakdown
+
+  servicesProvided
+  locationProvided
+  image
+  name
+  phone
+  recipientDetails
+  pickup
+  drop
+  jobDetails
+  inventory
+  serviceDetails
+  ActiveUserStatus
+`;
+
 /**
  * 🚀 NEW: Helper to check if a bid is still valid based on validityOfQuote and submittedAt
  * This is the CORE logic for hiding expired bids
@@ -61,6 +90,10 @@ export const createBid = async (req, res) => {
       bidderId,
       recipientId,
       jobId,
+
+      // 🔥 NEW
+      costBreakdown,
+
       servicesProvided,
       locationProvided,
       image,
@@ -75,71 +108,98 @@ export const createBid = async (req, res) => {
       recipientDetails,
     } = req.body;
 
-    // Basic required validation
-    if (!quotation && quotation !== 0) {
+    // 🔴 REQUIRED VALIDATIONS
+    if (quotation === undefined || quotation === null) {
       return res.status(400).json({ message: "quotation is required" });
     }
-    if (!bidderId) {
-      return res.status(400).json({ message: "bidderId is required" });
-    }
-    if (!recipientId) {
-      return res.status(400).json({ message: "recipientId is required" });
-    }
-    if (!jobId) {
-      return res.status(400).json({ message: "jobId is required" });
+
+    if (!costBreakdown || typeof costBreakdown !== "object") {
+      return res.status(400).json({ message: "costBreakdown is required" });
     }
 
-    // Validate array fields
+    if (
+      costBreakdown.totalAmount === undefined ||
+      costBreakdown.totalAmount === null
+    ) {
+      return res.status(400).json({
+        message: "costBreakdown.totalAmount is required",
+      });
+    }
+
+    if (!bidderId || !recipientId || !jobId) {
+      return res.status(400).json({
+        message: "bidderId, recipientId and jobId are required",
+      });
+    }
+
+    // 🔹 Phone validation
+    if (phone && !/^[0-9]{10}$/.test(phone)) {
+      return res.status(400).json({
+        message: "Top-level phone must be a valid 10-digit number",
+      });
+    }
+
+    // 🔹 recipientDetails validation
+    if (recipientDetails && !isValidRecipientDetails(recipientDetails)) {
+      return res.status(400).json({
+        message:
+          "recipientDetails must include name, image and valid 10-digit phone",
+      });
+    }
+
+    // 🔹 Arrays validation
     if (
       (servicesProvided && !Array.isArray(servicesProvided)) ||
       (locationProvided && !Array.isArray(locationProvided)) ||
       (inventory && !Array.isArray(inventory))
     ) {
       return res.status(400).json({
-        message: "servicesProvided, locationProvided, and inventory must be arrays",
-      });
-    }
-
-    // Validate phone if provided (top-level phone)
-    if (phone) {
-      const phoneRegex = /^[0-9]{10}$/;
-      if (!phoneRegex.test(phone)) {
-        return res.status(400).json({
-          message: "Top-level phone must be a valid 10-digit number",
-        });
-      }
-    }
-
-    // Validate recipientDetails if provided
-    if (recipientDetails && !isValidRecipientDetails(recipientDetails)) {
-      return res.status(400).json({
         message:
-          "recipientDetails must include name (string), image (string), and phone (10-digit string)",
+          "servicesProvided, locationProvided and inventory must be arrays",
       });
     }
 
-    // Create new Bid document
+    // ✅ CREATE BID
     const newBid = new Bid({
       quotation,
+
       status,
       validityOfQuote,
       advancePayment,
       noteToCustomer,
+
       bidderId,
       recipientId,
       jobId,
+
+      // 🔥 COST BREAKDOWN (MAIN ADDITION)
+      costBreakdown: {
+        baseTransport: costBreakdown.baseTransport || 0,
+        packingCharges: costBreakdown.packingCharges || 0,
+        loadingUnloadingCharges:
+          costBreakdown.loadingUnloadingCharges || 0,
+        insuranceCharges: costBreakdown.insuranceCharges || 0,
+        storageCharges: costBreakdown.storageCharges || 0,
+        dismantlingCharges: costBreakdown.dismantlingCharges || 0,
+        otherCharges: costBreakdown.otherCharges || 0,
+        totalAmount: costBreakdown.totalAmount,
+      },
+
       servicesProvided: servicesProvided || [],
       locationProvided: locationProvided || [],
+
       image: image || "",
       name: name || "",
       phone: phone || "",
+
       recipientDetails: recipientDetails
         ? {
-            name: recipientDetails.name || "",
-            image: recipientDetails.image || "",
-            phone: recipientDetails.phone || "",
+            name: recipientDetails.name,
+            image: recipientDetails.image,
+            phone: recipientDetails.phone,
           }
         : { name: "", image: "", phone: "" },
+
       pickup: {
         city: pickup?.city || "",
         state: pickup?.state || "",
@@ -148,6 +208,7 @@ export const createBid = async (req, res) => {
         addressLine1: pickup?.addressLine1 || "",
         addressLine2: pickup?.addressLine2 || "",
       },
+
       drop: {
         city: drop?.city || "",
         state: drop?.state || "",
@@ -156,35 +217,44 @@ export const createBid = async (req, res) => {
         addressLine1: drop?.addressLine1 || "",
         addressLine2: drop?.addressLine2 || "",
       },
+
       jobDetails: {
         dateOfPacking: jobDetails?.dateOfPacking || "",
         propertySize: jobDetails?.propertySize || "",
       },
+
       inventory:
         inventory?.map(({ title, subtitle, qty }) => ({
           title,
           subtitle: subtitle || "",
           qty: qty || 1,
         })) || [],
+
       serviceDetails: {
         packingRequired: serviceDetails?.packingRequired || "",
         insuranceRequired: serviceDetails?.insuranceRequired || "",
         storageRequired: serviceDetails?.storageRequired || "",
         dismantlingRequired: serviceDetails?.dismantlingRequired || "",
       },
+
       ActiveUserStatus: ActiveUserStatus || "Quote Sent",
     });
 
     await newBid.save();
+
     return res.status(201).json({
       message: "✅ Bid created successfully",
       bid: newBid,
     });
   } catch (error) {
     console.error("❌ Error creating bid:", error);
-    res.status(500).json({ message: "Server error", error: error.message });
+    return res.status(500).json({
+      message: "Server error",
+      error: error.message,
+    });
   }
 };
+
 
 // 🟢 Get all bids for a job (🚀 NOW FILTERS EXPIRED BIDS)
 export const getBidsByJob = async (req, res) => {
@@ -223,7 +293,7 @@ export const getBidsForUser = async (req, res) => {
     const bids = await Bid.find({ bidderId })
       .populate("recipientId", "name email")
       .select(
-        "quotation status validityOfQuote advancePayment noteToCustomer bidderId recipientId jobId activeStatus submittedAt servicesProvided locationProvided image name phone recipientDetails pickup drop jobDetails inventory serviceDetails ActiveUserStatus"
+        BID_SELECT_FIELDS
       )
       .lean();
 
@@ -250,9 +320,7 @@ export const getBidsByRecipient = async (req, res) => {
     }
 
     const bids = await Bid.find({ recipientId })
-      .select(
-        "quotation status validityOfQuote advancePayment noteToCustomer bidderId recipientId jobId activeStatus submittedAt servicesProvided locationProvided image name phone recipientDetails pickup drop jobDetails inventory serviceDetails ActiveUserStatus"
-      )
+      .select(BID_SELECT_FIELDS)
       .sort({ createdAt: -1 })
       .lean();
 
@@ -288,9 +356,7 @@ export const updateBidStatus = async (req, res) => {
       bidId,
       { activeStatus },
       { new: true }
-    ).select(
-      "quotation status validityOfQuote advancePayment noteToCustomer bidderId recipientId jobId activeStatus submittedAt servicesProvided locationProvided image name phone recipientDetails pickup drop jobDetails inventory serviceDetails ActiveUserStatus"
-    );
+    ).select(BID_SELECT_FIELDS);
 
     if (!updatedBid) {
       return res.status(404).json({ message: "Bid not found" });
@@ -349,9 +415,7 @@ export const checkUserBidOnJob = async (req, res) => {
     const bid = await Bid.findOne({
       jobId: jobId,
       bidderId: userId,
-    }).select(
-      "quotation status validityOfQuote advancePayment noteToCustomer bidderId recipientId jobId activeStatus submittedAt name phone image recipientDetails"
-    ).lean();
+    }).select(BID_SELECT_FIELDS).lean();
 
     if (!bid) {
       return res.status(200).json({
@@ -395,6 +459,40 @@ export const checkUserBidOnJob = async (req, res) => {
 };
 
 // 🟢 Update ActiveUserStatus (NO CHANGE)
+// export const updateActiveUserStatus = async (req, res) => {
+//   try {
+//     const { bidId } = req.params;
+//     const { ActiveUserStatus } = req.body;
+
+//     if (!mongoose.Types.ObjectId.isValid(bidId)) {
+//       return res.status(400).json({ message: "Invalid Bid ID format" });
+//     }
+
+//     const allowedStatuses = ["In Progress", "Quote Sent", "Cancelled", "Completed", "Rejected"];
+//     if (!ActiveUserStatus || !allowedStatuses.includes(ActiveUserStatus)) {
+//       return res.status(400).json({
+//         message: "Invalid ActiveUserStatus. Allowed values: " + allowedStatuses.join(", "),
+//       });
+//     }
+
+//     const updatedBid = await Bid.findByIdAndUpdate(
+//       bidId,
+//       { ActiveUserStatus },
+//       { new: true }
+//     ).select(BID_SELECT_FIELDS  );
+
+//     if (!updatedBid) return res.status(404).json({ message: "Bid not found" });
+
+//     return res.status(200).json({
+//       message: "✅ ActiveUserStatus updated successfully",
+//       bid: updatedBid,
+//     });
+//   } catch (error) {
+//     console.error("❌ Error updating ActiveUserStatus:", error);
+//     return res.status(500).json({ message: "Server error", error: error.message });
+//   }
+// };
+
 export const updateActiveUserStatus = async (req, res) => {
   try {
     const { bidId } = req.params;
@@ -404,33 +502,58 @@ export const updateActiveUserStatus = async (req, res) => {
       return res.status(400).json({ message: "Invalid Bid ID format" });
     }
 
-    const allowedStatuses = ["In Progress", "Quote Sent", "Cancelled", "Completed", "Rejected"];
+    const allowedStatuses = [
+      "In Progress",
+      "Quote Sent",
+      "Cancelled",
+      "Completed",
+      "Rejected",
+    ];
+
     if (!ActiveUserStatus || !allowedStatuses.includes(ActiveUserStatus)) {
       return res.status(400).json({
-        message: "Invalid ActiveUserStatus. Allowed values: " + allowedStatuses.join(", "),
+        message:
+          "Invalid ActiveUserStatus. Allowed values: " +
+          allowedStatuses.join(", "),
       });
     }
 
+    // 🔹 1. Update Bid (same as before)
     const updatedBid = await Bid.findByIdAndUpdate(
       bidId,
       { ActiveUserStatus },
       { new: true }
-    ).select(
-      "quotation status validityOfQuote advancePayment noteToCustomer bidderId recipientId jobId activeStatus submittedAt servicesProvided locationProvided image name phone recipientDetails pickup drop jobDetails inventory serviceDetails ActiveUserStatus"
     );
 
-    if (!updatedBid) return res.status(404).json({ message: "Bid not found" });
+    if (!updatedBid) {
+      return res.status(404).json({ message: "Bid not found" });
+    }
+
+    // 🔹 2. ALSO update Location job status → In Progress
+    if (updatedBid.jobId) {
+      await Location.findByIdAndUpdate(
+        updatedBid.jobId,
+        {
+          "jobDetails.status": "In Progress",
+          updatedAt: new Date(),
+        },
+        { new: true }
+      );
+    }
 
     return res.status(200).json({
-      message: "✅ ActiveUserStatus updated successfully",
+      message:
+        "✅ ActiveUserStatus updated & Job status set to In Progress",
       bid: updatedBid,
     });
   } catch (error) {
     console.error("❌ Error updating ActiveUserStatus:", error);
-    return res.status(500).json({ message: "Server error", error: error.message });
+    return res.status(500).json({
+      message: "Server error",
+      error: error.message,
+    });
   }
 };
-
 // 🟢 Get ALL bids (🚀 WITH OPTIONAL EXPIRED FILTER)
 export const getAllBids = async (req, res) => {
   try {
@@ -438,9 +561,7 @@ export const getAllBids = async (req, res) => {
 
     let bids = await Bid.find()
       .sort({ createdAt: -1 })
-      .select(
-        "quotation status validityOfQuote advancePayment noteToCustomer bidderId recipientId jobId activeStatus submittedAt servicesProvided locationProvided image name phone recipientDetails pickup drop jobDetails inventory serviceDetails ActiveUserStatus"
-      )
+      .select(BID_SELECT_FIELDS  )
       .lean();
 
     // 🚀 FILTER: Hide expired bids UNLESS includeExpired=true
@@ -465,9 +586,7 @@ export const getExpiredBids = async (req, res) => {
   try {
     const bids = await Bid.find()
       .sort({ createdAt: -1 })
-      .select(
-        "quotation status validityOfQuote advancePayment noteToCustomer bidderId recipientId jobId activeStatus submittedAt servicesProvided locationProvided image name phone recipientDetails pickup drop jobDetails inventory serviceDetails ActiveUserStatus"
-      )
+      .select(BID_SELECT_FIELDS)
       .lean();
 
     const expiredBids = bids.filter((bid) => !isBidValid(bid));
