@@ -4,9 +4,14 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "test": "echo \"No tests configured\"",
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
+  "keywords": [],
+  "author": "",
   "license": "ISC",
+  "description": "",
   "dependencies": {
     "@googlemaps/google-maps-services-js": "^3.4.2",
     "axios": "^1.12.0",
@@ -15,9 +20,12 @@
     "dotenv": "^17.2.1",
     "express": "^4.21.2",
     "firebase-admin": "^13.4.0",
+    "i": "^0.3.7",
     "mime-types": "^3.0.1",
     "mongoose": "^8.16.5",
     "multer": "^2.0.2",
+    "nodemon": "^3.1.10",
+    "npm": "^11.5.1",
     "openai": "^5.20.1",
     "socket.io": "^4.8.1"
   }
