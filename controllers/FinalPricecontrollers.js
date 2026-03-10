@@ -161,6 +161,40 @@ export const deleteTransaction = async (req, res) => {
  * Get latest finalPrice by senderId + receiverId
  * Accepts senderId/receiverId in body (POST) or query (GET)
  */
+// export const getPriceBySenderReceiver = async (req, res) => {
+//   try {
+//     const senderId = req.body?.senderId ?? req.query?.senderId;
+//     const receiverId = req.body?.receiverId ?? req.query?.receiverId;
+
+//     if (!senderId || !receiverId) {
+//       return res.status(400).json({ error: "senderId and receiverId are required" });
+//     }
+
+//     // Include meta in projection { finalPrice:1, ActiveStatus:1, meta:1 }
+//     const tx = await Transaction.findOne(
+//       { senderId, receiverId },
+//       { finalPrice: 1, ActiveStatus: 1, meta: 1 }  // <-- META ADDED HERE
+//     ).sort({ createdAt: -1 });
+
+//     if (!tx) {
+//       return res.status(404).json({ error: "No transaction found for given senderId & receiverId" });
+//     }
+
+//     return res.json({
+//       senderId,
+//       receiverId,
+//       finalPrice: tx.finalPrice,
+//       ActiveStatus: tx.ActiveStatus ?? "none",
+//       meta: tx.meta ?? {}   // <-- META RETURNED
+//     });
+//   } catch (err) {
+//     console.error("getPriceBySenderReceiver error:", err);
+//     return res.status(500).json({ error: "Internal server error" });
+//   }
+// };
+
+
+
 export const getPriceBySenderReceiver = async (req, res) => {
   try {
     const senderId = req.body?.senderId ?? req.query?.senderId;
@@ -170,10 +204,15 @@ export const getPriceBySenderReceiver = async (req, res) => {
       return res.status(400).json({ error: "senderId and receiverId are required" });
     }
 
-    // Include meta in projection { finalPrice:1, ActiveStatus:1, meta:1 }
+    // 🔥 Dono directions check karo: A→B ya B→A
     const tx = await Transaction.findOne(
-      { senderId, receiverId },
-      { finalPrice: 1, ActiveStatus: 1, meta: 1 }  // <-- META ADDED HERE
+      {
+        $or: [
+          { senderId: senderId, receiverId: receiverId },
+          { senderId: receiverId, receiverId: senderId },
+        ],
+      },
+      { finalPrice: 1, ActiveStatus: 1, meta: 1, senderId: 1, receiverId: 1 }
     ).sort({ createdAt: -1 });
 
     if (!tx) {
@@ -181,11 +220,11 @@ export const getPriceBySenderReceiver = async (req, res) => {
     }
 
     return res.json({
-      senderId,
-      receiverId,
+      senderId: tx.senderId,       // actual jo DB mein hai
+      receiverId: tx.receiverId,   // actual jo DB mein hai
       finalPrice: tx.finalPrice,
       ActiveStatus: tx.ActiveStatus ?? "none",
-      meta: tx.meta ?? {}   // <-- META RETURNED
+      meta: tx.meta ?? {},
     });
   } catch (err) {
     console.error("getPriceBySenderReceiver error:", err);

@@ -1,15 +1,15 @@
 import mongoose from "mongoose";
 
 const itemSchema = new mongoose.Schema({
-  title: { type: String, required: true },      // Item ka title
-  subtitle: { type: String },                   // Item ka subtitle (optional)
-  qty: { type: Number, required: true, min: 0 } // Quantity
+  title: { type: String },
+  subtitle: { type: String },
+  qty: { type: Number, min: 0 }
 });
 
 const locationSchema = new mongoose.Schema({
   userId: {
-    type: String, // Simple string store
-    required: true, // Required field
+    type: String,
+    required: true,
   },
   image: {
     type: String,
@@ -31,44 +31,43 @@ const locationSchema = new mongoose.Schema({
     state: { type: String },
     addressLine1: { type: String },
     addressLine2: { type: String },
-    pincode: { type: String }, // ✅ Pincode added
+    pincode: { type: String },
   },
   jobDetails: {
     dateOfPacking: { type: Date },
     propertySize: { type: String },
+    truckSize: { type: String }, // Added from payload
     status: {
       type: String,
       enum: ["Posted", "Bid Received", "In Progress", "Completed"],
       default: "Posted"
-    }, // Job status
-    progressStep: { type: Number, min: 0, max: 3, default: 0 }, // Progress indicator
+    },
+    progressStep: { type: Number, min: 0, max: 3, default: 0 },
   },
   inventory: [itemSchema],
   serviceDetails: {
     packingRequired: { type: String, enum: ["Yes", "No", "Partially"] },
+    estimatedValue: { type: String, default: '' },
     insuranceRequired: { type: String, enum: ["Yes", "No", "Estimated Value"] },
     storageRequired: { type: String, enum: ["Yes", "No", "Estimated Value"] },
     dismantlingRequired: { type: String, enum: ["Yes", "No", "Partially"] },
+    packingLayers: {
+      type: [String],   // ✅ Array of strings
+    }, // Added from payload
+    storageDuration: { type: String }, // Added from payload
+    additionalServices: {
+      type: [String],   // ✅ Array of strings
+    }, // Added from payload
   },
+  moveType: { type: String }, // Added from payload
+  liftAvailable: { type: String }, // Added from payload
+  PickUpFloorNo : { type: String }, // Added from payload
+  DropFloorNo : { type: String }, // Added from payload
+  jobName: { type: String }, // Added from payload
   createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now }, // Track updates
-  bids: [{
-    quotation: { type: Number, required: true }, // Send a Quotation field
-    status: {
-      type: String,
-      enum: ["Negotiable", "Non-Negotiable"],
-      default: "Negotiable"
-    }, // Status (Negotiable/Non-Negotiable)
-    validityOfQuote: {
-      type: String,
-      enum: ["7 Days", "10 Days", "1 Month"],
-      default: "7 Days"
-    }, // Validity of Quote
-    advancePayment: { type: Number, min: 0, default: 0 }, // Advance payment percentage or amount
-    noteToCustomer: { type: String, default: "" }, // Leave a note to the customer
-    bidderId: { type: String, required: true }, // ID of the bidder
-    submittedAt: { type: Date, default: Date.now }, // When the bid was submitted
-  }],
+  updatedAt: { type: Date, default: Date.now },
+  
+  
 });
 
 const Location = mongoose.model("Location", locationSchema);

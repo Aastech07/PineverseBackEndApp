@@ -13,7 +13,7 @@ const bidSchema = new mongoose.Schema(
       default: 'Negotiable',
       required: true,
     },
-
+    jobName: { type: String }, // Added from payload
     costBreakdown: {
       baseTransport: {
         type: Number,
@@ -166,7 +166,7 @@ const bidSchema = new mongoose.Schema(
 
     ActiveUserStatus: {
       type: String,
-      enum: ['In Progress', 'Quote Sent', 'Cancelled', 'Completed', 'Rejected'],
+      enum: ['In Progress', 'Quote Sent', 'Cancelled', 'Completed', 'Rejected','Under Negotiation'],
       default: 'In Progress',
     },
 

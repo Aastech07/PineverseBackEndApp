@@ -19,15 +19,23 @@ import { uploadpdf } from './upload_pdf/uploadpdf.js';
 import reviewRoutes from './routes/reviewRoutes.js';
 import transactionRoutes from './routes/transactions.js';
 import locationRoutes from './routes/locationRoutes.js';
+import countRoutes from './routes/countRoutes.js';
+import SkipRoute from './routes/SkipRoute.js';
+// import socketRoutes from "./routes/socketRoutes.js";
+// import { setSocketInstance } from "./controllers/socketController.js";
+ 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*', methods: ['GET', 'POST'] } });
 dotenv.config();
 
+//setSocketInstance(io);
+
 await connectDB();
 
 app.use(cors());
 app.use(express.json());
+//app.use("/api/socket", socketRoutes);
 
 // ========== UPLOADS SETUP ==========
 const uploadsDir = path.join(process.cwd(), 'uploads');
@@ -129,8 +137,10 @@ app.use('/', uploadpdf);
 app.use('/api', bidRoutes);
 //app.use('/api', followRouter(io));
 app.use('/api', reviewRoutes);
-app.use("/api", transactionRoutes);
 app.use('/api', locationRoutes);
+app.use('/api', countRoutes)
+app.use("/api", transactionRoutes);
+app.use('/api', SkipRoute);
 
 // ========== Mongoose Message Schema (with caption & activeStatus & negotiateAmount) ==========
 const attachmentSchema = new mongoose.Schema(
@@ -140,6 +150,15 @@ const attachmentSchema = new mongoose.Schema(
     mime: String,
     size: Number,
     caption: { type: String, default: '' }
+  },
+  { _id: false }
+);
+
+const amountHistorySchema = new mongoose.Schema(
+  {
+    amount: { type: Number, default: 0 },
+    addedBy: { type: String, default: '' }, // senderId jo amount add kar raha hai
+    addedAt: { type: Date, default: Date.now }
   },
   { _id: false }
 );
@@ -165,7 +184,18 @@ const messageSchema = new mongoose.Schema(
       enum: ['accept', 'negotiate', 'none'],
       default: 'none'
     },
+  
+    paymentStatus: {
+      type: String,
+      enum: ['pending', 'completed', 'failed'],
+      default: 'pending'
+    },
 
+    // ✅ Current amount (single latest)
+    getCurrentAmount: { type: Number, default: 0 },
+
+    // ✅ All amounts history array
+    amountHistory: { type: [amountHistorySchema], default: [] },
     // negotiated amount (optional)
     negotiateAmount: { type: Number, default: 0 }
   },
@@ -190,7 +220,7 @@ async function sendPushNotification(token, title, body, data = {}) {
       android: { priority: 'high', notification: { sound: 'default' } },
       apns: { payload: { aps: { sound: 'default' } } }
     };
-   // await admin.messaging().send(message);
+    // await admin.messaging().send(message);
     console.log(`✅ Push sent to ${targetToken}`);
   } catch (error) {
     console.error('❌ Push error:', error.message);
@@ -224,6 +254,68 @@ app.get('/getUserToken/:userId', async (req, res) => {
   }
 });
 
+// ========== PAYMENT STATUS ROUTES & SOCKET ==========
+
+// REST API: Update paymentStatus
+app.post('/updatePaymentStatus', async (req, res) => {
+  const { senderId, receiverId, paymentStatus } = req.body;
+  try {
+    if (!['pending', 'completed', 'failed'].includes(paymentStatus)) {
+      return res.status(400).json({ error: 'Invalid paymentStatus' });
+    }
+    // Upsert - sender+receiver pair ke liye
+    const updated = await Message.findOneAndUpdate(
+      { senderId, receiverId },
+      { senderId, receiverId, paymentStatus, text: '', status: 'sent', isRead: false, activeStatus: 'none', negotiateAmount: 0 },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+
+    const payload = {
+      paymentStatus: updated.paymentStatus,
+      senderId: updated.senderId,
+      receiverId: updated.receiverId,
+    };
+
+    io.to(senderId).emit('payment_status_updated', payload);
+    io.to(receiverId).emit('payment_status_updated', payload);
+
+    res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('❌ Error updating paymentStatus:', err.message);
+    res.status(500).json({ error: 'Failed to update paymentStatus' });
+  }
+});
+
+app.get('/getPaymentStatus', async (req, res) => {
+  const { senderId, receiverId } = req.query;
+  try {
+    const messages = await Message.find(
+      {
+        $or: [
+          { senderId, receiverId },
+          { senderId: receiverId, receiverId: senderId }
+        ]
+      }
+    ).select('paymentStatus senderId receiverId -_id');
+
+    if (!messages.length) return res.status(404).json({ error: 'No payment status found' });
+
+    const senderToReceiver = messages.find(m => m.senderId === senderId && m.receiverId === receiverId);
+    const receiverToSender = messages.find(m => m.senderId === receiverId && m.receiverId === senderId);
+
+    res.json({
+      senderToReceiver: senderToReceiver
+        ? { senderId: senderToReceiver.senderId, receiverId: senderToReceiver.receiverId, paymentStatus: senderToReceiver.paymentStatus }
+        : null,
+      receiverToSender: receiverToSender
+        ? { senderId: receiverToSender.senderId, receiverId: receiverToSender.receiverId, paymentStatus: receiverToSender.paymentStatus }
+        : null,
+    });
+  } catch (err) {
+    console.error('❌ Error fetching paymentStatus:', err.message);
+    res.status(500).json({ error: 'Failed to fetch paymentStatus' });
+  }
+});
 // ========== SOCKET.IO ==========
 io.on('connection', (socket) => {
   console.log(`🟢 User connected: ${socket.id}`);
@@ -392,6 +484,248 @@ io.on('connection', (socket) => {
       console.error('❌ Error marking as read:', err.message);
     }
   });
+  
+  socket.on('transaction_updated', async (data) => {
+    try {
+      const {
+        senderId,
+        receiverId,
+        finalPrice,
+        ActiveStatus,           // "Accept" ya "ACCEPT" ya "accept"
+        meta = {},
+      } = data;
+
+      if (!senderId || !receiverId) {
+        console.log("❌ transaction_updated → missing senderId or receiverId");
+        return;
+      }
+
+      const normalizedStatus = String(ActiveStatus || '').toLowerCase().trim();
+
+      console.log(`[TXN] ${senderId} → ${receiverId} | Status: ${normalizedStatus} | ₹${finalPrice || '?'}`);
+
+      const broadcastPayload = {
+        finalPrice: finalPrice ?? null,
+        ActiveStatus: normalizedStatus === 'accept' ? 'Accept' : normalizedStatus,
+        normalizedStatus,
+        fromUser: senderId,
+        meta,
+        timestamp: new Date().toISOString(),
+      };
+
+      // Dono ko bhejo — important!
+      io.to(senderId).emit('transaction_updated', broadcastPayload);
+      io.to(receiverId).emit('transaction_updated', broadcastPayload);
+
+      // Optional: Agar accept hua to saare pending messages ko seen kar do
+      if (normalizedStatus === 'accept') {
+        await Message.updateMany(
+          {
+            $or: [
+              { senderId, receiverId },
+              { senderId: receiverId, receiverId: senderId }
+            ],
+            isRead: false
+          },
+          { isRead: true, status: 'seen' }
+        );
+
+        // Reset unread counts
+        io.to(senderId).emit('unread_count_update', { userId: senderId, from: receiverId, count: 0 });
+        io.to(receiverId).emit('unread_count_update', { userId: receiverId, from: senderId, count: 0 });
+      }
+
+    } catch (err) {
+      console.error("❌ transaction_updated socket error:", err);
+    }
+  });
+
+  // ✅ REALTIME PAYMENT STATUS UPDATE - place inside io.on('connection', ...) block
+  socket.on('update_payment_status', async ({ senderId, receiverId, paymentStatus }) => {
+    try {
+      if (!['pending', 'completed', 'failed'].includes(paymentStatus)) {
+        socket.emit('payment_status_error', { error: 'Invalid paymentStatus' });
+        return;
+      }
+
+      if (!senderId || !receiverId) {
+        socket.emit('payment_status_error', { error: 'Missing senderId or receiverId' });
+        return;
+      }
+
+      const updated = await Message.findOneAndUpdate(
+        { senderId, receiverId },
+        {
+          senderId,
+          receiverId,
+          paymentStatus,
+          text: '',
+          status: 'sent',
+          isRead: false,
+          activeStatus: 'none',
+          negotiateAmount: 0
+        },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      );
+
+      const payload = {
+        senderId: updated.senderId,
+        receiverId: updated.receiverId,
+        paymentStatus: updated.paymentStatus,
+        timestamp: new Date().toISOString(),
+      };
+
+      // Emit to BOTH sender and receiver — same as get_payment_status pattern
+      io.to(senderId).emit('payment_status_updated', payload);
+      io.to(receiverId).emit('payment_status_updated', payload);
+
+      console.log(`[PAYMENT] ${senderId} → ${receiverId} | Status: ${paymentStatus}`);
+
+    } catch (err) {
+      console.error('❌ Socket update_payment_status error:', err.message);
+      socket.emit('payment_status_error', { error: 'Failed to update payment status' });
+    }
+  });
+  // SOCKET: Realtime paymentStatus update
+  socket.on('get_payment_status', async ({ senderId, receiverId }) => {
+    try {
+      const messages = await Message.find({
+        $or: [
+          { senderId, receiverId },
+          { senderId: receiverId, receiverId: senderId }
+        ]
+      }).sort({ createdAt: -1 }).select('paymentStatus senderId receiverId createdAt');
+
+      // Agar koi message nahi mila
+      if (!messages.length) {
+        socket.emit('payment_status_result', {
+          senderToReceiver: { senderId, receiverId, paymentStatus: 'pending' },
+          receiverToSender: { senderId: receiverId, receiverId: senderId, paymentStatus: 'pending' }
+        });
+        return;
+      }
+
+      const senderToReceiver = messages.find(
+        m => String(m.senderId) === String(senderId) && String(m.receiverId) === String(receiverId)
+      );
+      const receiverToSender = messages.find(
+        m => String(m.senderId) === String(receiverId) && String(m.receiverId) === String(senderId)
+      );
+
+      const payload = {
+        senderToReceiver: {
+          senderId,
+          receiverId,
+          paymentStatus: senderToReceiver?.paymentStatus || 'pending'
+        },
+        receiverToSender: {
+          senderId: receiverId,
+          receiverId: senderId,
+          paymentStatus: receiverToSender?.paymentStatus || 'pending'
+        }
+      };
+
+      io.to(senderId).emit('payment_status_result', payload);
+      io.to(receiverId).emit('payment_status_result', payload);
+
+    } catch (err) {
+      console.error('❌ Socket get_payment_status error:', err.message);
+      socket.emit('payment_status_error', { error: 'Failed to fetch payment status' });
+    }
+  });
+
+  // ✅ REALTIME - Amount array me add karo
+  socket.on('add_amount_history', async ({ senderId, receiverId, amount, addedBy }) => {
+    try {
+      if (!senderId || !receiverId) {
+        socket.emit('amount_history_error', { error: 'Missing senderId or receiverId' });
+        return;
+      }
+      if (amount === undefined || isNaN(Number(amount))) {
+        socket.emit('amount_history_error', { error: 'Invalid amount' });
+        return;
+      }
+
+      const newEntry = {
+        amount: Number(amount),
+        addedBy: addedBy || senderId,
+        addedAt: new Date()
+      };
+
+      const updated = await Message.findOneAndUpdate(
+        { senderId, receiverId },
+        {
+          $push: { amountHistory: newEntry },
+          $set: { getCurrentAmount: Number(amount) }
+        },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      );
+
+      const payload = {
+        senderId: updated.senderId,
+        receiverId: updated.receiverId,
+        getCurrentAmount: updated.getCurrentAmount,
+        amountHistory: updated.amountHistory,
+        latestEntry: newEntry,
+        timestamp: new Date().toISOString()
+      };
+
+      // ✅ Dono ko realtime bhejo
+      io.to(senderId).emit('amount_history_updated', payload);
+      io.to(receiverId).emit('amount_history_updated', payload);
+
+      console.log(`[HISTORY] ${senderId} → ${receiverId} | ₹${amount} added`);
+    } catch (err) {
+      console.error('❌ add_amount_history error:', err.message);
+      socket.emit('amount_history_error', { error: 'Failed to add amount' });
+    }
+  });
+
+  // ✅ REALTIME - Saari history fetch karo
+  socket.on('get_amount_history', async ({ senderId, receiverId }) => {
+    try {
+      if (!senderId || !receiverId) {
+        socket.emit('amount_history_error', { error: 'Missing senderId or receiverId' });
+        return;
+      }
+
+      const messages = await Message.find({
+        $or: [
+          { senderId, receiverId },
+          { senderId: receiverId, receiverId: senderId }
+        ]
+      }).select('amountHistory getCurrentAmount senderId receiverId');
+
+      const senderToReceiver = messages.find(
+        m => String(m.senderId) === String(senderId) && String(m.receiverId) === String(receiverId)
+      );
+      const receiverToSender = messages.find(
+        m => String(m.senderId) === String(receiverId) && String(m.receiverId) === String(senderId)
+      );
+
+      const payload = {
+        senderToReceiver: {
+          senderId,
+          receiverId,
+          getCurrentAmount: senderToReceiver?.getCurrentAmount ?? 0,
+          amountHistory: senderToReceiver?.amountHistory ?? []
+        },
+        receiverToSender: {
+          senderId: receiverId,
+          receiverId: senderId,
+          getCurrentAmount: receiverToSender?.getCurrentAmount ?? 0,
+          amountHistory: receiverToSender?.amountHistory ?? []
+        }
+      };
+
+      io.to(senderId).emit('amount_history_result', payload);
+      io.to(receiverId).emit('amount_history_result', payload);
+
+    } catch (err) {
+      console.error('❌ get_amount_history error:', err.message);
+      socket.emit('amount_history_error', { error: 'Failed to get amount history' });
+    }
+  });
 
   socket.on('disconnect', () => {
     console.log(`🔴 User disconnected: ${socket.id}`);
@@ -402,7 +736,7 @@ io.on('connection', (socket) => {
 
 app.post('/getMessages', async (req, res) => {
   const { senderId, receiverId } = req.body;
-  
+
   const formatTime = (date) =>
     date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -547,6 +881,133 @@ app.post('/unreadCounts', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch unread counts' });
   }
 });
+
+// ========== CURRENT AMOUNT ROUTES ==========
+
+// ========== AMOUNT HISTORY ROUTES ==========
+
+// ✅ POST - Naya amount array me push karo
+app.post('/addAmountHistory', async (req, res) => {
+  const { senderId, receiverId, amount, addedBy } = req.body;
+  try {
+    if (!senderId || !receiverId) {
+      return res.status(400).json({ error: 'senderId and receiverId required' });
+    }
+    if (amount === undefined || isNaN(Number(amount))) {
+      return res.status(400).json({ error: 'Invalid amount' });
+    }
+
+    const newEntry = {
+      amount: Number(amount),
+      addedBy: addedBy || senderId,
+      addedAt: new Date()
+    };
+
+    const updated = await Message.findOneAndUpdate(
+      { senderId, receiverId },
+      {
+        $push: { amountHistory: newEntry },       // ✅ Array me push
+        $set: { getCurrentAmount: Number(amount) } // ✅ Current amount bhi update
+      },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+
+    const payload = {
+      senderId: updated.senderId,
+      receiverId: updated.receiverId,
+      getCurrentAmount: updated.getCurrentAmount,
+      amountHistory: updated.amountHistory,
+      latestEntry: newEntry,
+      timestamp: new Date().toISOString()
+    };
+
+    // ✅ Realtime dono ko bhejo
+    io.to(senderId).emit('amount_history_updated', payload);
+    io.to(receiverId).emit('amount_history_updated', payload);
+
+    res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('❌ Error adding amount history:', err.message);
+    res.status(500).json({ error: 'Failed to add amount history' });
+  }
+});
+
+// ✅ GET - Saari amount history fetch karo
+app.get('/getAmountHistory', async (req, res) => {
+  const { senderId, receiverId } = req.query;
+  try {
+    if (!senderId || !receiverId) {
+      return res.status(400).json({ error: 'senderId and receiverId required' });
+    }
+
+    const messages = await Message.find({
+      $or: [
+        { senderId, receiverId },
+        { senderId: receiverId, receiverId: senderId }
+      ]
+    }).select('amountHistory getCurrentAmount senderId receiverId');
+
+    const senderToReceiver = messages.find(
+      m => String(m.senderId) === String(senderId) && String(m.receiverId) === String(receiverId)
+    );
+    const receiverToSender = messages.find(
+      m => String(m.senderId) === String(receiverId) && String(m.receiverId) === String(senderId)
+    );
+
+    res.json({
+      senderToReceiver: {
+        senderId,
+        receiverId,
+        getCurrentAmount: senderToReceiver?.getCurrentAmount ?? 0,
+        amountHistory: senderToReceiver?.amountHistory ?? []
+      },
+      receiverToSender: {
+        senderId: receiverId,
+        receiverId: senderId,
+        getCurrentAmount: receiverToSender?.getCurrentAmount ?? 0,
+        amountHistory: receiverToSender?.amountHistory ?? []
+      }
+    });
+  } catch (err) {
+    console.error('❌ Error fetching amount history:', err.message);
+    res.status(500).json({ error: 'Failed to fetch amount history' });
+  }
+});
+
+// ✅ DELETE - Poori history clear karo (optional)
+app.post('/clearAmountHistory', async (req, res) => {
+  const { senderId, receiverId } = req.body;
+  try {
+    const updated = await Message.findOneAndUpdate(
+      { senderId, receiverId },
+      { $set: { amountHistory: [], getCurrentAmount: 0 } },
+      { new: true }
+    );
+
+    if (!updated) return res.status(404).json({ error: 'Record not found' });
+
+    const payload = {
+      senderId,
+      receiverId,
+      amountHistory: [],
+      getCurrentAmount: 0,
+      timestamp: new Date().toISOString()
+    };
+
+    io.to(senderId).emit('amount_history_cleared', payload);
+    io.to(receiverId).emit('amount_history_cleared', payload);
+
+    res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('❌ Error clearing amount history:', err.message);
+    res.status(500).json({ error: 'Failed to clear amount history' });
+  }
+});
+// ========== ADD THIS INSIDE io.on('connection', (socket) => { ... }) ==========
+// Place this AFTER the existing socket.on('mark_as_read', ...) block and BEFORE socket.on('disconnect', ...)
+
+// ✅ REALTIME DEAL ACCEPTANCE - broadcasts to BOTH sender and receiver
+
 
 // ========== START SERVER ==========
 const PORT = process.env.PORT || 5000;

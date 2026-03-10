@@ -8,7 +8,8 @@ import {
     checkUserBidOnJob,
     updateActiveUserStatus,
     getAllBids,
-    getBidsByRecipient
+    getBidsByRecipient,
+    deleteBid
 } from "../controllers/bidController.js";
 
 const router = express.Router();
@@ -36,5 +37,8 @@ router.get("/jobs", getJobIdsByRecipient);
 router.get("/check/:jobId/:userId", checkUserBidOnJob);
 
 router.patch("/:bidId/active-user-status", updateActiveUserStatus);
+
+router.delete("/:bidId/delete", deleteBid)
+
 
 export default router;
