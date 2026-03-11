@@ -1,3 +1,4 @@
+
 // server.js
 import dotenv from 'dotenv';
 import express from 'express';
@@ -23,7 +24,7 @@ import countRoutes from './routes/countRoutes.js';
 import SkipRoute from './routes/SkipRoute.js';
 // import socketRoutes from "./routes/socketRoutes.js";
 // import { setSocketInstance } from "./controllers/socketController.js";
- 
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*', methods: ['GET', 'POST'] } });
@@ -184,7 +185,7 @@ const messageSchema = new mongoose.Schema(
       enum: ['accept', 'negotiate', 'none'],
       default: 'none'
     },
-  
+
     paymentStatus: {
       type: String,
       enum: ['pending', 'completed', 'failed'],
@@ -484,7 +485,7 @@ io.on('connection', (socket) => {
       console.error('❌ Error marking as read:', err.message);
     }
   });
-  
+
   socket.on('transaction_updated', async (data) => {
     try {
       const {
